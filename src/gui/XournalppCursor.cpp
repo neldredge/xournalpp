@@ -348,7 +348,7 @@ auto XournalppCursor::getPenCursor() -> GdkCursor* {
     }
 
 
-    return createHighlighterOrPenCursor(3, 1.0);
+    return createHighlighterOrPenCursor(3, 0.2);
 }
 
 
