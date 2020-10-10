@@ -12,9 +12,9 @@ KeyboardInputHandler::KeyboardInputHandler(InputContext* inputContext): Abstract
 
 KeyboardInputHandler::~KeyboardInputHandler() = default;
 
-auto KeyboardInputHandler::handleImpl(InputEvent* event) -> bool {
+auto KeyboardInputHandler::handleImpl(InputEvent const& event) -> bool {
     GtkXournal* xournal = inputContext->getXournal();
-    GdkEvent* gdkEvent = event->sourceEvent;
+    GdkEvent* gdkEvent = event.sourceEvent;
 
     if (gdkEvent->type == GDK_KEY_PRESS) {
         auto keyEvent = reinterpret_cast<GdkEventKey*>(gdkEvent);
@@ -31,19 +31,19 @@ auto KeyboardInputHandler::handleImpl(InputEvent* event) -> bool {
             }
 
             if (keyEvent->keyval == GDK_KEY_Left) {
-                selection->moveSelection(d, 0);
-                return true;
-            }
-            if (keyEvent->keyval == GDK_KEY_Up) {
-                selection->moveSelection(0, d);
-                return true;
-            }
-            if (keyEvent->keyval == GDK_KEY_Right) {
                 selection->moveSelection(-d, 0);
                 return true;
             }
-            if (keyEvent->keyval == GDK_KEY_Down) {
+            if (keyEvent->keyval == GDK_KEY_Up) {
                 selection->moveSelection(0, -d);
+                return true;
+            }
+            if (keyEvent->keyval == GDK_KEY_Right) {
+                selection->moveSelection(d, 0);
+                return true;
+            }
+            if (keyEvent->keyval == GDK_KEY_Down) {
+                selection->moveSelection(0, d);
                 return true;
             }
         }

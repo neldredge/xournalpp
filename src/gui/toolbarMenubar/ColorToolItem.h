@@ -23,14 +23,13 @@ class ColorSelectImage;
 
 class ColorToolItem: public AbstractToolItem {
 public:
-    ColorToolItem(ActionHandler* handler, ToolHandler* toolHandler, GtkWindow* parent, int color,
+    ColorToolItem(ActionHandler* handler, ToolHandler* toolHandler, GtkWindow* parent, Color color,
                   bool selektor = false);
     virtual ~ColorToolItem();
 
 public:
     virtual void actionSelected(ActionGroup group, ActionType action);
-    void enableColor(int color);
-    bool colorEqualsMoreOreLess(int color) const;
+    void enableColor(Color color);
     virtual void activated(GdkEvent* event, GtkMenuItem* menuitem, GtkToolButton* toolbutton);
 
     virtual string getToolDisplayName();
@@ -38,7 +37,7 @@ public:
 
     virtual string getId();
 
-    int getColor() const;
+    Color getColor() const;
 
     /**
      * Enable / Disable the tool item
@@ -64,7 +63,7 @@ private:
     /**
      * Color
      */
-    int color;
+    Color color;
 
     /**
      * Name of the Color
@@ -75,11 +74,6 @@ private:
      * Icon to display
      */
     ColorSelectImage* icon = nullptr;
-
-    /**
-     * Switch to pen if the color icon is pressed
-     */
-    bool switchToPen = false;
 
     GtkWindow* parent = nullptr;
     ToolHandler* toolHandler = nullptr;

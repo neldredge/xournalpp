@@ -8,7 +8,7 @@
 #include "i18n.h"
 
 PageTypeHandler::PageTypeHandler(GladeSearchpath* gladeSearchPath) {
-    string file = gladeSearchPath->findFile("", "pagetemplates.ini");
+    auto file = gladeSearchPath->findFile("", "pagetemplates.ini");
 
     if (!parseIni(file) || this->types.size() < 5) {
 
@@ -22,6 +22,8 @@ PageTypeHandler::PageTypeHandler(GladeSearchpath* gladeSearchPath) {
         addPageTypeInfo(_("Staves"), PageTypeFormat::Staves, "");
         addPageTypeInfo(_("Graph"), PageTypeFormat::Graph, "");
         addPageTypeInfo(_("Dotted"), PageTypeFormat::Dotted, "");
+        addPageTypeInfo(_("Isometric Dotted"), PageTypeFormat::IsoDotted, "");
+        addPageTypeInfo(_("Isometric Graph"), PageTypeFormat::IsoGraph, "");
     }
 
     // Special types
@@ -37,10 +39,10 @@ PageTypeHandler::~PageTypeHandler() {
     types.clear();
 }
 
-auto PageTypeHandler::parseIni(const string& filename) -> bool {
+auto PageTypeHandler::parseIni(fs::path const& filepath) -> bool {
     GKeyFile* config = g_key_file_new();
     g_key_file_set_list_separator(config, ',');
-    if (!g_key_file_load_from_file(config, filename.c_str(), G_KEY_FILE_NONE, nullptr)) {
+    if (!g_key_file_load_from_file(config, filepath.u8string().c_str(), G_KEY_FILE_NONE, nullptr)) {
         g_key_file_free(config);
         return false;
     }
@@ -112,6 +114,12 @@ auto PageTypeHandler::getPageTypeFormatForString(const string& format) -> PageTy
     if (format == "dotted") {
         return PageTypeFormat::Dotted;
     }
+    if (format == "isodotted") {
+        return PageTypeFormat::IsoDotted;
+    }
+    if (format == "isograph") {
+        return PageTypeFormat::IsoGraph;
+    }
     if (format == ":pdf") {
         return PageTypeFormat::Pdf;
     }
@@ -138,6 +146,10 @@ auto PageTypeHandler::getStringForPageTypeFormat(const PageTypeFormat& format) -
             return "graph";
         case PageTypeFormat::Dotted:
             return "dotted";
+        case PageTypeFormat::IsoDotted:
+            return "isodotted";
+        case PageTypeFormat::IsoGraph:
+            return "isograph";
         case PageTypeFormat::Pdf:
             return ":pdf";
         case PageTypeFormat::Image:
@@ -145,4 +157,5 @@ auto PageTypeHandler::getStringForPageTypeFormat(const PageTypeFormat& format) -
         case PageTypeFormat::Copy:
             return ":copy";
     }
+    return "ruled";
 }

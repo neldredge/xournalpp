@@ -1,10 +1,11 @@
 #include "TextEditor.h"
 
+#include <memory>
+
 #include <gtk/gtkimmulticontext.h>
 
 #include "control/Control.h"
 #include "undo/ColorUndoAction.h"
-#include "util/cpp14memory.h"
 #include "view/DocumentView.h"
 #include "view/TextView.h"
 
@@ -106,8 +107,8 @@ void TextEditor::setText(const string& text) {
     gtk_text_buffer_place_cursor(this->buffer, &first);
 }
 
-auto TextEditor::setColor(int color) -> UndoAction* {
-    int origColor = this->text->getColor();
+auto TextEditor::setColor(Color color) -> UndoAction* {
+    auto origColor = this->text->getColor();
     this->text->setColor(color);
 
     repaintEditor();
@@ -551,7 +552,7 @@ void TextEditor::contentsChanged(bool forceCreateUndoAction) {
                                                        (currentText.length() - lastText.length())) > 100) {
         if (!lastText.empty() && !this->undoActions.empty() &&
             this->undoActions.front().get().getUndoText() != currentText) {
-            auto undo = mem::make_unique<TextUndoAction>(gui->getPage(), gui->getPage()->getSelectedLayer(), this->text,
+            auto undo = std::make_unique<TextUndoAction>(gui->getPage(), gui->getPage()->getSelectedLayer(), this->text,
                                                          lastText, this);
             UndoRedoHandler* handler = gui->getXournal()->getControl()->getUndoRedoHandler();
             this->undoActions.emplace_back(std::ref(*undo));
@@ -924,7 +925,7 @@ void TextEditor::drawCursor(cairo_t* cr, double x, double y, double height, doub
 }
 
 void TextEditor::paint(cairo_t* cr, GdkRectangle* repaintRect, double zoom) {
-    GtkColorWrapper selectionColor = this->gui->getSelectionColor();
+    GdkRGBA selectionColor = this->gui->getSelectionColor();
 
     cairo_save(cr);
 
@@ -970,8 +971,9 @@ void TextEditor::paint(cairo_t* cr, GdkRectangle* repaintRect, double zoom) {
     bool hasSelection = gtk_text_buffer_get_selection_bounds(this->buffer, &start, &end);
 
     if (hasSelection) {
+        auto selectionColorU16 = Util::GdkRGBA_to_ColorU16(selectionColor);
         PangoAttribute* attrib =
-                pango_attr_background_new(selectionColor.red, selectionColor.green, selectionColor.blue);
+                pango_attr_background_new(selectionColorU16.red, selectionColorU16.green, selectionColorU16.blue);
         PangoAttrList* list = pango_layout_get_attributes(this->layout);
 
         attrib->start_index = getByteOffset(gtk_text_iter_get_offset(&start));
@@ -1009,8 +1011,7 @@ void TextEditor::paint(cairo_t* cr, GdkRectangle* repaintRect, double zoom) {
 
     // set the line always the same size on display
     cairo_set_line_width(cr, 1 / zoom);
-    cairo_set_source_rgb(cr, selectionColor.red / 65536.0, selectionColor.green / 65536.0,
-                         selectionColor.blue / 65536.0);
+    gdk_cairo_set_source_rgba(cr, &selectionColor);
 
     cairo_rectangle(cr, x0 - 5 / zoom, y0 - 5 / zoom, width + 10 / zoom, height + 10 / zoom);
     cairo_stroke(cr);

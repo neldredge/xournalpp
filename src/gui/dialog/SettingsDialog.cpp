@@ -16,7 +16,8 @@ SettingsDialog::SettingsDialog(GladeSearchpath* gladeSearchPath, Settings* setti
         GladeGui(gladeSearchPath, "settings.glade", "settingsDialog"),
         settings(settings),
         control(control),
-        callib(zoomcallib_new()) {
+        callib(zoomcallib_new()),
+        latexPanel(gladeSearchPath) {
     GtkWidget* vbox = get("zoomVBox");
     g_return_if_fail(vbox != nullptr);
 
@@ -34,14 +35,20 @@ SettingsDialog::SettingsDialog(GladeSearchpath* gladeSearchPath, Settings* setti
                      }),
                      this);
 
+    g_signal_connect(get("cbIgnoreFirstStylusEvents"), "toggled",
+                     G_CALLBACK(+[](GtkToggleButton* togglebutton, SettingsDialog* self) {
+                         self->enableWithCheckbox("cbIgnoreFirstStylusEvents", "spNumIgnoredStylusEvents");
+                     }),
+                     this);
+
 
     g_signal_connect(get("btTestEnable"), "clicked", G_CALLBACK(+[](GtkButton* bt, SettingsDialog* self) {
-                         system(gtk_entry_get_text(GTK_ENTRY(self->get("txtEnableTouchCommand"))));
+                         Util::systemWithMessage(gtk_entry_get_text(GTK_ENTRY(self->get("txtEnableTouchCommand"))));
                      }),
                      this);
 
     g_signal_connect(get("btTestDisable"), "clicked", G_CALLBACK(+[](GtkButton* bt, SettingsDialog* self) {
-                         system(gtk_entry_get_text(GTK_ENTRY(self->get("txtDisableTouchCommand"))));
+                         Util::systemWithMessage(gtk_entry_get_text(GTK_ENTRY(self->get("txtDisableTouchCommand"))));
                      }),
                      this);
 
@@ -84,9 +91,15 @@ SettingsDialog::SettingsDialog(GladeSearchpath* gladeSearchPath, Settings* setti
             G_CALLBACK(+[](GtkComboBox* comboBox, SettingsDialog* self) { self->customHandRecognitionToggled(); }),
             this);
 
+    g_signal_connect(get("cbStylusCursorType"), "changed", G_CALLBACK(+[](GtkComboBox* comboBox, SettingsDialog* self) {
+                         self->customStylusIconTypeChanged();
+                     }),
+                     this);
+
     gtk_box_pack_start(GTK_BOX(vbox), callib, false, true, 0);
     gtk_widget_show(callib);
 
+    initLanguageSettings();
     initMouseButtonEvents();
 
     vector<InputDevice> deviceList = DeviceListHelper::getDeviceList(this->settings);
@@ -103,6 +116,8 @@ SettingsDialog::SettingsDialog(GladeSearchpath* gladeSearchPath, Settings* setti
         gtk_box_pack_end(GTK_BOX(container), label, true, true, 0);
         gtk_widget_show(label);
     }
+
+    gtk_container_add(GTK_CONTAINER(this->get("latexTabBox")), this->latexPanel.get("latexSettingsPanel"));
 }
 
 SettingsDialog::~SettingsDialog() {
@@ -120,19 +135,23 @@ SettingsDialog::~SettingsDialog() {
     this->settings = nullptr;
 }
 
+void SettingsDialog::initLanguageSettings() {
+    languageConfig = std::make_unique<LanguageConfigGui>(getGladeSearchPath(), get("hboxLanguageSelect"), settings);
+}
+
 void SettingsDialog::initMouseButtonEvents(const char* hbox, int button, bool withDevice) {
     this->buttonConfigs.push_back(new ButtonConfigGui(getGladeSearchPath(), get(hbox), settings, button, withDevice));
 }
 
 void SettingsDialog::initMouseButtonEvents() {
-    initMouseButtonEvents("hboxMidleMouse", 1);
-    initMouseButtonEvents("hboxRightMouse", 2);
-    initMouseButtonEvents("hboxEraser", 0);
-    initMouseButtonEvents("hboxTouch", 3, true);
-    initMouseButtonEvents("hboxPenButton1", 5);
-    initMouseButtonEvents("hboxPenButton2", 6);
+    initMouseButtonEvents("hboxMidleMouse", BUTTON_MIDDLE);
+    initMouseButtonEvents("hboxRightMouse", BUTTON_RIGHT);
+    initMouseButtonEvents("hboxEraser", BUTTON_ERASER);
+    initMouseButtonEvents("hboxTouch", BUTTON_TOUCH, true);
+    initMouseButtonEvents("hboxPenButton1", BUTTON_STYLUS);
+    initMouseButtonEvents("hboxPenButton2", BUTTON_STYLUS2);
 
-    initMouseButtonEvents("hboxDefaultTool", 4);
+    initMouseButtonEvents("hboxDefaultTool", BUTTON_DEFAULT);
 }
 
 void SettingsDialog::setDpi(int dpi) {
@@ -182,6 +201,13 @@ void SettingsDialog::customHandRecognitionToggled() {
     gtk_widget_set_sensitive(get("boxCustomTouchDisableSettings"), touchMethod == 2);
 }
 
+void SettingsDialog::customStylusIconTypeChanged() {
+    GtkWidget* cbStylusCursorType = get("cbStylusCursorType");
+    int stylusCursorType = gtk_combo_box_get_active(GTK_COMBO_BOX(cbStylusCursorType));
+    bool showCursorHighlightOptions = stylusCursorType != STYLUS_CURSOR_NONE;
+    gtk_widget_set_sensitive(get("highlightCursorGrid"), showCursorHighlightOptions);
+}
+
 void SettingsDialog::load() {
     loadCheckbox("cbSettingPresureSensitivity", settings->isPressureSensitivity());
     loadCheckbox("cbEnableZoomGestures", settings->isZoomGesturesEnabled());
@@ -195,13 +221,15 @@ void SettingsDialog::load() {
     loadCheckbox("cbStrokeFilterEnabled", settings->getStrokeFilterEnabled());
     loadCheckbox("cbDoActionOnStrokeFiltered", settings->getDoActionOnStrokeFiltered());
     loadCheckbox("cbTrySelectOnStrokeFiltered", settings->getTrySelectOnStrokeFiltered());
-    loadCheckbox("cbBigCursor", settings->isShowBigCursor());
-    loadCheckbox("cbHighlightPosition", settings->isHighlightPosition());
+    loadCheckbox("cbSnapRecognizedShapesEnabled", settings->getSnapRecognizedShapesEnabled());
+    loadCheckbox("cbRestoreLineWidthEnabled", settings->getRestoreLineWidthEnabled());
     loadCheckbox("cbDarkTheme", settings->isDarkTheme());
     loadCheckbox("cbHideHorizontalScrollbar", settings->getScrollbarHideType() & SCROLLBAR_HIDE_HORIZONTAL);
     loadCheckbox("cbHideVerticalScrollbar", settings->getScrollbarHideType() & SCROLLBAR_HIDE_VERTICAL);
     loadCheckbox("cbDisableScrollbarFadeout", settings->isScrollbarFadeoutDisabled());
     loadCheckbox("cbTouchWorkaround", settings->isTouchWorkaround());
+    const bool ignoreStylusEventsEnabled = settings->getIgnoredStylusEvents() != 0;  // 0 means disabled, >0 enabled
+    loadCheckbox("cbIgnoreFirstStylusEvents", ignoreStylusEventsEnabled);
     loadCheckbox("cbNewInputSystem", settings->getExperimentalInputSystemEnabled());
     loadCheckbox("cbInputSystemTPCButton", settings->getInputSystemTPCButtonEnabled());
     loadCheckbox("cbInputSystemDrawOutsideWindow", settings->getInputSystemDrawOutsideWindowEnabled());
@@ -216,6 +244,13 @@ void SettingsDialog::load() {
     GtkWidget* spAutosaveTimeout = get("spAutosaveTimeout");
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(spAutosaveTimeout), settings->getAutosaveTimeout());
 
+    GtkWidget* spNumIgnoredStylusEvents = get("spNumIgnoredStylusEvents");
+    if (!ignoreStylusEventsEnabled) {  // The spinButton's value should be >= 1
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(spNumIgnoredStylusEvents), 1);
+    } else {
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(spNumIgnoredStylusEvents), settings->getIgnoredStylusEvents());
+    }
+
     GtkWidget* spPairsOffset = get("spPairsOffset");
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(spPairsOffset), settings->getPairsOffset());
 
@@ -224,6 +259,9 @@ void SettingsDialog::load() {
 
     GtkWidget* spSnapGridTolerance = get("spSnapGridTolerance");
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(spSnapGridTolerance), settings->getSnapGridTolerance());
+
+    GtkWidget* spSnapGridSize = get("spSnapGridSize");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spSnapGridSize), settings->getSnapGridSize() / DEFAULT_GRID_SIZE);
 
     GtkWidget* spZoomStep = get("spZoomStep");
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(spZoomStep), settings->getZoomStep());
@@ -266,6 +304,27 @@ void SettingsDialog::load() {
     color = Util::rgb_to_GdkRGBA(settings->getSelectionColor());
     gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(get("colorSelection")), &color);
 
+    loadCheckbox("cbHighlightPosition", settings->isHighlightPosition());
+    color = Util::argb_to_GdkRGBA(settings->getCursorHighlightColor());
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(get("cursorHighlightColor")), &color);
+    color = Util::argb_to_GdkRGBA(settings->getCursorHighlightBorderColor());
+    gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(get("cursorHighlightBorderColor")), &color);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(get("cursorHighlightRadius")), settings->getCursorHighlightRadius());
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(get("cursorHighlightBorderWidth")),
+                              settings->getCursorHighlightBorderWidth());
+
+    switch (settings->getStylusCursorType()) {
+        case STYLUS_CURSOR_NONE:
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbStylusCursorType")), 0);
+            break;
+        case STYLUS_CURSOR_BIG:
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbStylusCursorType")), 2);
+            break;
+        case STYLUS_CURSOR_DOT:
+        default:
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbStylusCursorType")), 1);
+            break;
+    }
 
     bool hideFullscreenMenubar = false;
     bool hideFullscreenSidebar = false;
@@ -298,6 +357,7 @@ void SettingsDialog::load() {
     loadCheckbox("cbHideMenubarStartup", settings->isMenubarVisible());
 
     enableWithCheckbox("cbAutosave", "boxAutosave");
+    enableWithCheckbox("cbIgnoreFirstStylusEvents", "spNumIgnoredStylusEvents");
     enableWithCheckbox("cbAddVerticalSpace", "spAddVerticalSpace");
     enableWithCheckbox("cbAddHorizontalSpace", "spAddHorizontalSpace");
     enableWithCheckbox("cbDrawDirModsEnabled", "spDrawDirModsRadius");
@@ -308,6 +368,7 @@ void SettingsDialog::load() {
     enableWithCheckbox("cbStrokeFilterEnabled", "cbTrySelectOnStrokeFiltered");
     enableWithCheckbox("cbDisableTouchOnPenNear", "boxInternalHandRecognition");
     customHandRecognitionToggled();
+    customStylusIconTypeChanged();
 
 
     SElement& touch = settings->getCustomElement("touch");
@@ -365,20 +426,25 @@ void SettingsDialog::load() {
     }
 
     switch (static_cast<int>(settings->getAudioSampleRate())) {
-        case 96100:
-            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 1);
+        case 16000:
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 0);
+            break;
+        case 96000:
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 2);
             break;
         case 192000:
-            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 2);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 3);
             break;
         case 44100:
         default:
-            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 0);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(get("cbAudioSampleRate")), 1);
             break;
     }
 
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(get("spAudioGain")), settings->getAudioGain());
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(get("spDefaultSeekTime")), settings->getDefaultSeekTime());
+
+    this->latexPanel.load(settings->latexSettings);
 }
 
 auto SettingsDialog::updateHideString(const string& hidden, bool hideMenubar, bool hideSidebar) -> string {
@@ -437,8 +503,8 @@ void SettingsDialog::save() {
     settings->setStrokeFilterEnabled(getCheckbox("cbStrokeFilterEnabled"));
     settings->setDoActionOnStrokeFiltered(getCheckbox("cbDoActionOnStrokeFiltered"));
     settings->setTrySelectOnStrokeFiltered(getCheckbox("cbTrySelectOnStrokeFiltered"));
-    settings->setShowBigCursor(getCheckbox("cbBigCursor"));
-    settings->setHighlightPosition(getCheckbox("cbHighlightPosition"));
+    settings->setSnapRecognizedShapesEnabled(getCheckbox("cbSnapRecognizedShapesEnabled"));
+    settings->setRestoreLineWidthEnabled(getCheckbox("cbRestoreLineWidthEnabled"));
     settings->setDarkTheme(getCheckbox("cbDarkTheme"));
     settings->setTouchWorkaround(getCheckbox("cbTouchWorkaround"));
     settings->setExperimentalInputSystemEnabled(getCheckbox("cbNewInputSystem"));
@@ -458,14 +524,37 @@ void SettingsDialog::save() {
 
     GdkRGBA color;
     gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(get("colorBorder")), &color);
-    settings->setBorderColor(Util::gdkrgba_to_hex(color));
+    settings->setBorderColor(Util::GdkRGBA_to_argb(color));
 
     gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(get("colorBackground")), &color);
-    settings->setBackgroundColor(Util::gdkrgba_to_hex(color));
+    settings->setBackgroundColor(Util::GdkRGBA_to_argb(color));
 
     gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(get("colorSelection")), &color);
-    settings->setSelectionColor(Util::gdkrgba_to_hex(color));
+    settings->setSelectionColor(Util::GdkRGBA_to_argb(color));
 
+
+    settings->setHighlightPosition(getCheckbox("cbHighlightPosition"));
+    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(get("cursorHighlightColor")), &color);
+    settings->setCursorHighlightColor(Util::GdkRGBA_to_argb(color));
+    gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(get("cursorHighlightBorderColor")), &color);
+    settings->setCursorHighlightBorderColor(Util::GdkRGBA_to_argb(color));
+    GtkWidget* spCursorHighlightRadius = get("cursorHighlightRadius");
+    settings->setCursorHighlightRadius(gtk_spin_button_get_value(GTK_SPIN_BUTTON(spCursorHighlightRadius)));
+    GtkWidget* spCursorHighlightBorderWidth = get("cursorHighlightBorderWidth");
+    settings->setCursorHighlightBorderWidth(gtk_spin_button_get_value(GTK_SPIN_BUTTON(spCursorHighlightBorderWidth)));
+
+    switch (gtk_combo_box_get_active(GTK_COMBO_BOX(get("cbStylusCursorType")))) {
+        case 0:
+            settings->setStylusCursorType(STYLUS_CURSOR_NONE);
+            break;
+        case 2:
+            settings->setStylusCursorType(STYLUS_CURSOR_BIG);
+            break;
+        case 1:
+        default:
+            settings->setStylusCursorType(STYLUS_CURSOR_DOT);
+            break;
+    }
 
     bool hideFullscreenMenubar = getCheckbox("cbHideFullscreenMenubar");
     bool hideFullscreenSidebar = getCheckbox("cbHideFullscreenSidebar");
@@ -480,6 +569,7 @@ void SettingsDialog::save() {
     settings->setMenubarVisible(getCheckbox("cbHideMenubarStartup"));
 
     settings->setDefaultSaveName(gtk_entry_get_text(GTK_ENTRY(get("txtDefaultSaveName"))));
+    // Todo(fabian): use Util::fromGtkFilename!
     char* uri = gtk_file_chooser_get_uri(GTK_FILE_CHOOSER(get("fcAudioPath")));
     if (uri != nullptr) {
         settings->setAudioFolder(uri);
@@ -489,6 +579,14 @@ void SettingsDialog::save() {
     GtkWidget* spAutosaveTimeout = get("spAutosaveTimeout");
     int autosaveTimeout = gtk_spin_button_get_value(GTK_SPIN_BUTTON(spAutosaveTimeout));
     settings->setAutosaveTimeout(autosaveTimeout);
+
+    if (getCheckbox("cbIgnoreFirstStylusEvents")) {
+        GtkWidget* spNumIgnoredStylusEvents = get("spNumIgnoredStylusEvents");
+        int numIgnoredStylusEvents = gtk_spin_button_get_value(GTK_SPIN_BUTTON(spNumIgnoredStylusEvents));
+        settings->setIgnoredStylusEvents(numIgnoredStylusEvents);
+    } else {
+        settings->setIgnoredStylusEvents(0);  // This means nothing will be ignored
+    }
 
     GtkWidget* spPairsOffset = get("spPairsOffset");
     int numPairsOffset = gtk_spin_button_get_value(GTK_SPIN_BUTTON(spPairsOffset));
@@ -530,6 +628,8 @@ void SettingsDialog::save() {
         bcg->saveSettings();
     }
 
+    languageConfig->saveSettings();
+
     SElement& touch = settings->getCustomElement("touch");
     touch.setBool("disableTouch", getCheckbox("cbDisableTouchOnPenNear"));
     int touchMethod = gtk_combo_box_get_active(GTK_COMBO_BOX(get("cbTouchDisableMethod")));
@@ -555,6 +655,8 @@ void SettingsDialog::save() {
             static_cast<double>(gtk_spin_button_get_value(GTK_SPIN_BUTTON(get("spSnapRotationTolerance")))));
     settings->setSnapGridTolerance(
             static_cast<double>(gtk_spin_button_get_value(GTK_SPIN_BUTTON(get("spSnapGridTolerance")))));
+    settings->setSnapGridSize(
+            static_cast<double>(gtk_spin_button_get_value(GTK_SPIN_BUTTON(get("spSnapGridSize"))) * DEFAULT_GRID_SIZE));
 
     int selectedInputDeviceIndex = gtk_combo_box_get_active(GTK_COMBO_BOX(get("cbAudioInputDevice"))) - 1;
     if (selectedInputDeviceIndex >= 0 && selectedInputDeviceIndex < static_cast<int>(this->audioInputDevices.size())) {
@@ -569,13 +671,16 @@ void SettingsDialog::save() {
     }
 
     switch (gtk_combo_box_get_active(GTK_COMBO_BOX(get("cbAudioSampleRate")))) {
-        case 1:
-            settings->setAudioSampleRate(96100.0);
+        case 0:
+            settings->setAudioSampleRate(16000.0);
             break;
         case 2:
+            settings->setAudioSampleRate(96000.0);
+            break;
+        case 3:
             settings->setAudioSampleRate(192000.0);
             break;
-        case 0:
+        case 1:
         default:
             settings->setAudioSampleRate(44100.0);
             break;
@@ -588,6 +693,8 @@ void SettingsDialog::save() {
     for (DeviceClassConfigGui* deviceClassConfigGui: this->deviceClassConfigs) {
         deviceClassConfigGui->saveSettings();
     }
+
+    this->latexPanel.save(settings->latexSettings);
 
     settings->transactionEnd();
 

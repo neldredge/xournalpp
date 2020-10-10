@@ -134,7 +134,7 @@ void ToolMenuHandler::load(ToolbarData* d, GtkWidget* toolbar, const char* toolb
                     count++;
 
                     color = color.substr(2);
-                    gint c = g_ascii_strtoll(color.c_str(), nullptr, 16);
+                    auto c = Color(g_ascii_strtoull(color.c_str(), nullptr, 16));
 
                     auto* item = new ColorToolItem(listener, toolHandler, this->parent, c);
                     this->toolbarColorItems.push_back(item);
@@ -317,6 +317,7 @@ void ToolMenuHandler::initToolItems() {
     ADD_STOCK_ITEM("NEW", ACTION_NEW, "document-new", _("New Xournal"));
     ADD_STOCK_ITEM("OPEN", ACTION_OPEN, "document-open", _("Open file"));
     ADD_STOCK_ITEM("SAVE", ACTION_SAVE, "document-save", _("Save"));
+    ADD_STOCK_ITEM("PRINT", ACTION_PRINT, "document-print", _("Print"));
 
     // Menu Edit
     // ************************************************************************
@@ -462,7 +463,7 @@ void ToolMenuHandler::initToolItems() {
     // ************************************************************************
 
     // Color item - not in the menu
-    addToolItem(new ColorToolItem(listener, toolHandler, this->parent, 0xff0000, true));
+    addToolItem(new ColorToolItem(listener, toolHandler, this->parent, Color{0xff0000U}, true));
 
     addToolItem(new ToolSelectCombocontrol(this, listener, "SELECT"));
     addToolItem(new ToolDrawCombocontrol(this, listener, "DRAW"));
@@ -503,7 +504,7 @@ void ToolMenuHandler::setPageText(const string& text) { this->toolPageSpinner->s
 
 auto ToolMenuHandler::getModel() -> ToolbarModel* { return this->tbModel; }
 
-auto ToolMenuHandler::isColorInUse(int color) -> bool {
+auto ToolMenuHandler::isColorInUse(Color color) -> bool {
     for (ColorToolItem* it: this->toolbarColorItems) {
         if (it->getColor() == color) {
             return true;

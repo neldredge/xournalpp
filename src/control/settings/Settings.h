@@ -12,6 +12,7 @@
 #pragma once
 
 #include <map>
+#include <memory>
 
 #include <config-dev.h>
 #include <libxml/xmlreader.h>
@@ -20,43 +21,14 @@
 #include "control/Tool.h"
 #include "model/Font.h"
 
-#include "Path.h"
+#include "LatexSettings.h"
+#include "SettingsEnums.h"
+#include "filesystem.h"
 
-enum AttributeType {
-    ATTRIBUTE_TYPE_NONE,
-    ATTRIBUTE_TYPE_STRING,
-    ATTRIBUTE_TYPE_INT,
-    ATTRIBUTE_TYPE_DOUBLE,
-    ATTRIBUTE_TYPE_INT_HEX,
-    ATTRIBUTE_TYPE_BOOLEAN,
-};
-
-// use this as a bit flag
-enum ScrollbarHideType {
-    SCROLLBAR_HIDE_NONE = 0,
-    SCROLLBAR_HIDE_HORIZONTAL = 1 << 1,
-    SCROLLBAR_HIDE_VERTICAL = 1 << 2,
-    SCROLLBAR_HIDE_BOTH = SCROLLBAR_HIDE_HORIZONTAL | SCROLLBAR_HIDE_VERTICAL
-};
-
-/**
- * The user-selectable device types
- */
-enum class InputDeviceTypeOption {
-    Disabled = 0,
-    Mouse = 1,
-    Pen = 2,
-    Eraser = 3,
-    Touchscreen = 4,
-    MouseKeyboardCombo = 5,
-};
+constexpr auto DEFAULT_GRID_SIZE = 14.17;
 
 class ButtonConfig;
 class InputDevice;
-
-extern const char* BUTTON_NAMES[];
-const int BUTTON_COUNT = 7;
-
 
 class SAttribute {
 public:
@@ -74,34 +46,17 @@ public:
     string comment;
 };
 
-class SElement;
 
-class __RefSElement {
-public:
-    __RefSElement();
-    virtual ~__RefSElement();
-
-public:
-    void ref();
-    void unref();
-
-private:
-    std::map<string, SAttribute> attributes;
-    std::map<string, SElement> children;
-
-    int refcount;
-
-    friend class SElement;
-};
-
-class SElement {
-public:
-    SElement();
-    SElement(const SElement& elem);
-    virtual ~SElement();
+class SElement final {
+    struct SElementData {
+    private:
+        std::map<string, SAttribute> attributes;
+        std::map<string, SElement> children;
+        friend class SElement;
+    };
 
 public:
-    void operator=(const SElement& elem);
+    SElement() = default;
 
     void clear();
 
@@ -124,12 +79,12 @@ public:
     std::map<string, SElement>& children();
 
 private:
-    __RefSElement* element;
+    std::shared_ptr<SElementData> element = std::make_shared<SElementData>();
 };
 
 class Settings {
 public:
-    /*[[implicit]]*/ Settings(Path filename);
+    /*[[implicit]]*/ Settings(fs::path filepath);
     Settings(const Settings& settings) = delete;
     void operator=(const Settings& settings) = delete;
     virtual ~Settings();
@@ -146,6 +101,7 @@ private:
 
     static xmlNodePtr savePropertyDouble(const gchar* key, double value, xmlNodePtr parent);
     static xmlNodePtr saveProperty(const gchar* key, int value, xmlNodePtr parent);
+    static xmlNodePtr savePropertyUnsigned(const gchar* key, unsigned int value, xmlNodePtr parent);
     static xmlNodePtr saveProperty(const gchar* key, const gchar* value, xmlNodePtr parent);
 
     void saveData(xmlNodePtr root, const string& name, SElement& elem);
@@ -203,17 +159,17 @@ public:
     /**
      * The last saved path
      */
-    void setLastSavePath(Path p);
-    Path const& getLastSavePath() const;
+    void setLastSavePath(fs::path p);
+    fs::path const& getLastSavePath() const;
 
     /**
      * The last open path
      */
-    void setLastOpenPath(Path p);
-    Path const& getLastOpenPath() const;
+    void setLastOpenPath(fs::path p);
+    fs::path const& getLastOpenPath() const;
 
-    void setLastImagePath(const Path& p);
-    Path const& getLastImagePath() const;
+    void setLastImagePath(const fs::path& p);
+    fs::path const& getLastImagePath() const;
 
     void setMainWndSize(int width, int height);
     void setMainWndMaximized(bool max);
@@ -223,6 +179,9 @@ public:
 
     bool isSidebarVisible() const;
     void setSidebarVisible(bool visible);
+
+    bool isToolbarVisible() const;
+    void setToolbarVisible(bool visible);
 
     int getSidebarWidth() const;
     void setSidebarWidth(int width);
@@ -299,12 +258,26 @@ public:
     void setSnapGrid(bool b);
     double getSnapGridTolerance() const;
     void setSnapGridTolerance(double tolerance);
+    double getSnapGridSize() const;
+    void setSnapGridSize(double gridSize);
 
-    bool isShowBigCursor() const;
-    void setShowBigCursor(bool b);
+    StylusCursorType getStylusCursorType() const;
+    void setStylusCursorType(StylusCursorType stylusCursorType);
 
     bool isHighlightPosition() const;
     void setHighlightPosition(bool highlight);
+
+    Color getCursorHighlightColor() const;
+    void setCursorHighlightColor(Color color);
+
+    double getCursorHighlightRadius() const;
+    void setCursorHighlightRadius(double radius);
+
+    Color getCursorHighlightBorderColor() const;
+    void setCursorHighlightBorderColor(Color color);
+
+    double getCursorHighlightBorderWidth() const;
+    void setCursorHighlightBorderWidth(double width);
 
     ScrollbarHideType getScrollbarHideType() const;
     void setScrollbarHideType(ScrollbarHideType type);
@@ -331,14 +304,14 @@ public:
     string const& getPresentationHideElements() const;
     void setPresentationHideElements(string elements);
 
-    int getBorderColor() const;
-    void setBorderColor(int color);
+    Color getBorderColor() const;
+    void setBorderColor(Color color);
 
-    int getSelectionColor() const;
-    void setSelectionColor(int color);
+    Color getSelectionColor() const;
+    void setSelectionColor(Color color);
 
-    int getBackgroundColor() const;
-    void setBackgroundColor(int color);
+    Color getBackgroundColor() const;
+    void setBackgroundColor(Color color);
 
     int getPdfPageCacheSize() const;
     void setPdfPageCacheSize(int size);
@@ -369,6 +342,15 @@ public:
 
     string const& getPluginDisabled() const;
     void setPluginDisabled(const string& pluginDisabled);
+
+    /**
+     * Sets #numIgnoredStylusEvents. If given a negative value writes 0 instead.
+     */
+    void setIgnoredStylusEvents(int numEvents);
+    /**
+     * Returns #numIgnoredStylusEvents.
+     */
+    int getIgnoredStylusEvents() const;
 
     bool getExperimentalInputSystemEnabled() const;
     void setExperimentalInputSystemEnabled(bool systemEnabled);
@@ -418,7 +400,6 @@ public:
      */
     bool getStrokeFilterEnabled() const;
 
-
     /**
      * get strokeFilter settings
      */
@@ -450,6 +431,36 @@ public:
      */
     bool getTrySelectOnStrokeFiltered() const;
 
+    /**
+     * Set snap recognized shapes enabled
+     */
+    void setSnapRecognizedShapesEnabled(bool enabled);
+
+    /**
+     * Get snap recognized shapes enabled
+     */
+    bool getSnapRecognizedShapesEnabled() const;
+
+    /**
+     * Set line width restoring for resized edit selctions enabled
+     */
+    void setRestoreLineWidthEnabled(bool enabled);
+
+    /**
+     * Get line width restoring enabled
+     */
+    bool getRestoreLineWidthEnabled() const;
+
+    /**
+     * Set the preferred locale
+     */
+    void setPreferredLocale(std::string const& locale);
+
+    /**
+     * Get the preferred locale
+     */
+    std::string getPreferredLocale() const;
+
 public:
     // Custom settings
     SElement& getCustomElement(const string& name);
@@ -469,11 +480,13 @@ public:
      */
     void transactionEnd();
 
+    LatexSettings latexSettings{};
+
 private:
     /**
-     *  The config filename
+     *  The config filepath
      */
-    Path filename;
+    fs::path filepath;
 
 private:
     /**
@@ -497,6 +510,11 @@ private:
     bool showSidebar{};
 
     /**
+     *  If the sidebar is visible
+     */
+    bool showToolbar{};
+
+    /**
      *  The Width of the Sidebar
      */
     int sidebarWidth{};
@@ -507,14 +525,35 @@ private:
     bool sidebarOnRight{};
 
     /**
-     *  Show a better visible cursor for pen
+     *  Type of cursor icon to use with a stylus
      */
-    bool showBigCursor{};
+    StylusCursorType stylusCursorType;
 
     /**
-     * Show a yellow circle around the cursor
+     * Show a colored circle around the cursor
      */
     bool highlightPosition{};
+
+    /**
+     * Cursor highlight color (ARGB format)
+     */
+    Color cursorHighlightColor{};
+
+    /**
+     * Radius of cursor highlight circle. Note that this is limited by the size
+     * of the cursor in the display server (default is probably 30 pixels).
+     */
+    double cursorHighlightRadius{};
+
+    /**
+     * Cursor highlight border color (ARGB format)
+     */
+    Color cursorHighlightBorderColor{};
+
+    /**
+     * Width of cursor highlight border, in pixels.
+     */
+    double cursorHighlightBorderWidth{};
 
     /**
      * If the user uses a dark-themed DE, he should enable this
@@ -545,17 +584,17 @@ private:
     /**
      *  The last saved folder
      */
-    Path lastSavePath;
+    fs::path lastSavePath;
 
     /**
      *  The last opened folder
      */
-    Path lastOpenPath;
+    fs::path lastOpenPath;
 
     /**
      *  The last "insert image" folder
      */
-    Path lastImagePath;
+    fs::path lastImagePath;
 
     /**
      * The last used font
@@ -704,14 +743,6 @@ private:
 
     /**
      * The button config
-     *
-     * 0: eraser
-     * 1: middle button
-     * 2: right button
-     * 3: touch screen
-     * 4: default
-     * 5: Pen Button 1
-     * 6: Pen Button 2
      */
     ButtonConfig* buttonConfig[BUTTON_COUNT]{};
 
@@ -731,17 +762,17 @@ private:
      * The color to draw borders on selected elements
      * (Page, insert image selection etc.)
      */
-    int selectionBorderColor{};
+    Color selectionBorderColor{};
 
     /**
      * Color for Text selection, Stroke selection etc.
      */
-    int selectionMarkerColor{};
+    Color selectionMarkerColor{};
 
     /**
      * The color for Xournal page background
      */
-    int backgroundColor{};
+    Color backgroundColor{};
 
     /**
      * Page template String
@@ -767,6 +798,10 @@ private:
      * Rotation epsilon for rotation snapping feature
      */
     double snapRotationTolerance{};
+
+
+    /// Grid size for Snapping
+    double snapGridSize{};
 
     /**
      * Do not use GTK Scrolling / Touch handling
@@ -822,6 +857,22 @@ private:
     bool trySelectOnStrokeFiltered{};
 
     /**
+     * Whether snapping for recognized shapes is enabled
+     */
+    bool snapRecognizedShapesEnabled{};
+
+    /**
+     * Whether the line width should be preserved in a resizing operation
+     */
+    bool restoreLineWidthEnabled{};
+
+    /**
+     * How many stylus events since hitting the screen should be ignored before actually starting the action. If set to
+     * 0, no event will be ignored. Should not be negative.
+     */
+    int numIgnoredStylusEvents{};
+
+    /**
      * Whether the new experimental input system is activated
      */
     bool newInputSystemEnabled{};
@@ -839,4 +890,9 @@ private:
      * "Transaction" running, do not save until the end is reached
      */
     bool inTransaction{};
+
+    /** The preferred locale as its language code
+     * e.g. "en_US"
+     */
+    std::string preferredLocale;
 };

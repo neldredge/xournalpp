@@ -13,11 +13,14 @@
 
 // No include needed, this is included after PageView.h
 
+#include <limits>
 #include <optional>
 
 #include "util/audio/AudioPlayer.h"
 
+#include "PathUtil.h"
 #include "XournalView.h"
+#include "filesystem.h"
 
 class BaseSelectObject {
 public:
@@ -34,24 +37,31 @@ public:
         view->xournal->getControl()->clearSelection();
         matchRect = {gint(x - 10), gint(y - 10), 20, 20};
 
-        for (Layer* l: *view->page->getLayers()) {
-            if (view->page->isLayerVisible(l)) {
-                return checkLayer(l);
-            }
-        }
-        return false;
+        Layer* layer = this->view->getPage()->getSelectedLayer();
+        return checkLayer(layer);
     }
 
 protected:
     bool checkLayer(Layer* l) {
+        // Search for Element closest to center of matching rectangle
+        bool found = false;
+        double minDistSq = std::numeric_limits<double>::max();
+        const double mX = matchRect.x + matchRect.width / 2.0;
+        const double mY = matchRect.y + matchRect.height / 2.0;
         for (Element* e: *l->getElements()) {
-            if (e->intersectsArea(&matchRect)) {
+            const double eX = e->getX() + e->getElementWidth() / 2.0;
+            const double eY = e->getY() + e->getElementHeight() / 2.0;
+            const double dx = eX - mX;
+            const double dy = eY - mY;
+            const double distSq = dx * dx + dy * dy;
+            if (e->intersectsArea(&matchRect) && distSq < minDistSq) {
+                minDistSq = distSq;
                 if (this->checkElement(e)) {
-                    return true;
+                    found = true;
                 }
             }
         }
-        return false;
+        return found;
     }
 
     virtual bool checkElement(Element* e) = 0;
@@ -144,10 +154,12 @@ protected:
 
             if (!fn.empty()) {
                 if (fn.rfind(G_DIR_SEPARATOR, 0) != 0) {
-                    Path path = Path::fromUri(view->settings->getAudioFolder());
-                    path /= fn;
+                    auto path = Util::fromUri(view->settings->getAudioFolder());
 
-                    fn = path.str();
+                    // Assume path exists
+                    *path /= fn;
+
+                    fn = path->string();
                 }
                 auto* ac = view->getXournal()->getControl()->getAudioController();
                 bool success = ac->startPlayback(fn, (unsigned int)ts);

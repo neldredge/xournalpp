@@ -1,5 +1,7 @@
 #include "XournalMain.h"
 
+#include <memory>
+
 #include <glib/gstdio.h>
 #include <gtk/gtk.h>
 #include <libintl.h>
@@ -13,7 +15,6 @@
 #include "pdf/base/XojPdfExport.h"
 #include "pdf/base/XojPdfExportFactory.h"
 #include "undo/EmergencySaveRestore.h"
-#include "util/cpp14memory.h"
 #include "xojfile/LoadHandler.h"
 
 #include "Control.h"
@@ -23,6 +24,7 @@
 #include "config-dev.h"
 #include "config-paths.h"
 #include "config.h"
+#include "filesystem.h"
 #include "i18n.h"
 
 #if __linux__
@@ -46,7 +48,7 @@ void XournalMain::initLocalisation() {
 
 #ifdef __APPLE__
 #undef PACKAGE_LOCALE_DIR
-    Path p = Stacktrace::getExePath();
+    fs::path p = Stacktrace::getExePath();
     p /= "../Resources/share/locale/";
     const char* PACKAGE_LOCALE_DIR = p.c_str();
 #endif
@@ -70,26 +72,50 @@ void XournalMain::initLocalisation() {
     std::cout.imbue(std::locale());
 }
 
-void XournalMain::checkForErrorlog() {
-    Path errorDir = Util::getConfigSubfolder(ERRORLOG_DIR);
-    GDir* home = g_dir_open(errorDir.c_str(), 0, nullptr);
+XournalMain::MigrateResult XournalMain::migrateSettings() {
+    fs::path newConfigPath = Util::getConfigFolder();
 
-    if (home == nullptr) {
-        return;
-    }
-
-    vector<string> errorList;
-
-    const gchar* file = nullptr;
-    while ((file = g_dir_read_name(home)) != nullptr) {
-        if (g_file_test(file, G_FILE_TEST_IS_REGULAR)) {
-            if (StringUtils::startsWith(file, "errorlog.")) {
-                errorList.emplace_back(file);
+    if (!fs::exists(newConfigPath)) {
+        std::array<fs::path, 1> oldPaths = {
+                fs::u8path(g_get_home_dir()) /= ".xournalpp",
+        };
+        for (auto const& oldPath: oldPaths) {
+            if (!fs::is_directory(oldPath)) {
+                continue;
+            }
+            g_message("Migrating configuration from %s to %s", oldPath.c_str(), newConfigPath.c_str());
+            Util::ensureFolderExists(newConfigPath.parent_path());
+            try {
+                fs::copy(oldPath, newConfigPath, fs::copy_options::recursive);
+                constexpr auto msg = "Due to a recent update, Xournal++ has changed where it's configuration files are "
+                                     "stored.\nThey have been automatically copied from\n\t{1}\nto\n\t{2}";
+                return {MigrateStatus::Success,
+                        FS(_F(msg) % oldPath.u8string().c_str() % newConfigPath.u8string().c_str())};
+            } catch (fs::filesystem_error const& except) {
+                constexpr auto msg =
+                        "Due to a recent update, Xournal++ has changed where it's configuration files are "
+                        "stored.\nHowever, when attempting to copy\n\t{1}\nto\n\t{2}\nmigration failed:\n{3}";
+                g_message("Migration failed: %s", except.what());
+                return {MigrateStatus::Failure,
+                        FS(_F(msg) % oldPath.u8string().c_str() % newConfigPath.u8string().c_str() % except.what())};
             }
         }
     }
-    g_dir_close(home);
+    return {MigrateStatus::NotNeeded, ""};
+}
 
+void XournalMain::checkForErrorlog() {
+    fs::path errorDir = Util::getCacheSubfolder(ERRORLOG_DIR);
+    if (!fs::exists(errorDir)) {
+        return;
+    }
+
+    vector<fs::path> errorList;
+    for (auto const& f: fs::directory_iterator(errorDir)) {
+        if (f.is_regular_file() && f.path().stem() == "errorlog") {
+            errorList.emplace_back(f);
+        }
+    }
 
     if (errorList.empty()) {
         return;
@@ -106,7 +132,7 @@ void XournalMain::checkForErrorlog() {
               GIT_REPO_OWNER % GIT_BRANCH);
     msg += "\n";
 #endif
-    msg += FS(_F("The most recent log file name: {1}") % errorList[0]);
+    msg += FS(_F("The most recent log file name: {1}") % errorList[0].string());
 
     GtkWidget* dialog = gtk_message_dialog_new(nullptr, GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE, "%s",
                                                msg.c_str());
@@ -119,23 +145,22 @@ void XournalMain::checkForErrorlog() {
 
     int res = gtk_dialog_run(GTK_DIALOG(dialog));
 
-    Path errorlogPath = Util::getConfigSubfolder(ERRORLOG_DIR);
-    errorlogPath /= errorList[0];
+    auto const& errorlogPath = Util::getCacheSubfolder(ERRORLOG_DIR) / errorList[0];
     if (res == 1)  // Send Bugreport
     {
-        Util::openFileWithDefaultApplicaion(PROJECT_BUGREPORT);
-        Util::openFileWithDefaultApplicaion(errorlogPath);
+        Util::openFileWithDefaultApplication(PROJECT_BUGREPORT);
+        Util::openFileWithDefaultApplication(errorlogPath);
     } else if (res == 2)  // Open Logfile
     {
-        Util::openFileWithDefaultApplicaion(errorlogPath);
+        Util::openFileWithDefaultApplication(errorlogPath);
     } else if (res == 3)  // Open Logfile directory
     {
-        Util::openFileWithFilebrowser(errorlogPath.getParentPath());
+        Util::openFileWithFilebrowser(errorlogPath.parent_path());
     } else if (res == 4)  // Delete Logfile
     {
-        if (!errorlogPath.exists()) {
+        if (!fs::exists(errorlogPath)) {
             string msg = FS(_F("Errorlog cannot be deleted. You have to do it manually.\nLogfile: {1}") %
-                            errorlogPath.str());
+                            errorlogPath.string());
             XojMsgBox::showErrorToUser(nullptr, msg);
         }
     } else if (res == 5)  // Cancel
@@ -147,9 +172,9 @@ void XournalMain::checkForErrorlog() {
 }
 
 void XournalMain::checkForEmergencySave(Control* control) {
-    Path filename = Util::getConfigFile("emergencysave.xopp");
+    auto file = Util::getConfigFile("emergencysave.xopp");
 
-    if (!filename.exists()) {
+    if (!fs::exists(file)) {
         return;
     }
 
@@ -165,16 +190,16 @@ void XournalMain::checkForEmergencySave(Control* control) {
 
     if (res == 1)  // Delete file
     {
-        g_unlink(filename.c_str());
+        fs::remove(file);
     } else if (res == 2)  // Open File
     {
-        if (control->openFile(filename, -1, true)) {
-            control->getDocument()->setFilename("");
+        if (control->openFile(file, -1, true)) {
+            control->getDocument()->setFilepath("");
 
             // Make sure the document is changed, there is a question to ask for save
-            control->getUndoRedoHandler()->addUndoAction(mem::make_unique<EmergencySaveRestore>());
+            control->getUndoRedoHandler()->addUndoAction(std::make_unique<EmergencySaveRestore>());
             control->updateWindowTitle();
-            g_unlink(filename.c_str());
+            fs::remove(file);
         }
     }
 
@@ -190,16 +215,11 @@ auto XournalMain::exportImg(const char* input, const char* output) -> int {
         return -2;
     }
 
-    GFile* file = g_file_new_for_commandline_arg(output);
-
-    char* cpath = g_file_get_path(file);
-    string path = cpath;
-    g_free(cpath);
-    g_object_unref(file);
+    fs::path const path(output);
 
     ExportGraphicsFormat format = EXPORT_GRAPHICS_PNG;
 
-    if (StringUtils::endsWith(path, ".svg")) {
+    if (path.extension() == ".svg") {
         format = EXPORT_GRAPHICS_SVG;
     }
 
@@ -257,7 +277,9 @@ auto XournalMain::exportPdf(const char* input, const char* output) -> int {
 }
 
 auto XournalMain::run(int argc, char* argv[]) -> int {
+    g_set_prgname("com.github.xournalpp.xournalpp");
     this->initLocalisation();
+    MigrateResult migrateResult = this->migrateSettings();
 
     GError* error = nullptr;
     GOptionContext* context = g_option_context_new("FILE");
@@ -265,16 +287,19 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
     gchar** optFilename = nullptr;
     gchar* pdfFilename = nullptr;
     gchar* imgFilename = nullptr;
+    gboolean showVersion = false;
     int openAtPageNumber = -1;
 
     string create_pdf = _("PDF output filename");
     string create_img = _("Image output filename (.png / .svg)");
     string page_jump = _("Jump to Page (first Page: 1)");
     string audio_folder = _("Absolute path for the audio files playback");
+    string version = _("Get version of xournalpp");
     GOptionEntry options[] = {{"create-pdf", 'p', 0, G_OPTION_ARG_FILENAME, &pdfFilename, create_pdf.c_str(), nullptr},
                               {"create-img", 'i', 0, G_OPTION_ARG_FILENAME, &imgFilename, create_img.c_str(), nullptr},
                               {"page", 'n', 0, G_OPTION_ARG_INT, &openAtPageNumber, page_jump.c_str(), "N"},
                               {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &optFilename, "<input>", nullptr},
+                              {"version", 0, 0, G_OPTION_ARG_NONE, &showVersion, version.c_str(), nullptr},
                               {nullptr}};
 
     g_option_context_add_main_entries(context, options, GETTEXT_PACKAGE);
@@ -297,6 +322,13 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
         return exportImg(*optFilename, imgFilename);
     }
 
+    if (showVersion) {
+        g_printf("%s %s \n", PROJECT_NAME, PROJECT_VERSION);
+        g_printf("└──%s: %d.%d.%d \n", "libgtk", gtk_get_major_version(), gtk_get_minor_version(),
+                 gtk_get_micro_version());
+        return 0;
+    }
+
     // Checks for input method compatibility
 
     const char* imModule = g_getenv("GTK_IM_MODULE");
@@ -314,17 +346,24 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
                      false);  // will notify user if file not present. Path ui/ already added above.
 
     // init singleton
-    string colorNameFile = Util::getConfigFile("colornames.ini").str();
+    auto colorNameFile = Util::getConfigFile("colornames.ini");
     ToolbarColorNames::getInstance().loadFile(colorNameFile);
 
     auto* control = new Control(gladePath);
 
-    string icon = gladePath->getFirstSearchPath() + "/icons/";
-    gtk_icon_theme_prepend_search_path(gtk_icon_theme_get_default(), icon.c_str());
+    auto icon = gladePath->getFirstSearchPath() / "icons";
+    gtk_icon_theme_prepend_search_path(gtk_icon_theme_get_default(), icon.u8string().c_str());
 
     if (control->getSettings()->isDarkTheme()) {
-        string icon = gladePath->getFirstSearchPath() + "/iconsDark/";
-        gtk_icon_theme_prepend_search_path(gtk_icon_theme_get_default(), icon.c_str());
+        auto icon = gladePath->getFirstSearchPath() / "iconsDark";
+        gtk_icon_theme_prepend_search_path(gtk_icon_theme_get_default(), icon.u8string().c_str());
+    }
+
+    auto& globalLatexTemplatePath = control->getSettings()->latexSettings.globalTemplatePath;
+    if (globalLatexTemplatePath.empty()) {
+        globalLatexTemplatePath = findResourcePath("resources/") / "default_template.tex";
+        g_message("Using default latex template in %s", globalLatexTemplatePath.string().c_str());
+        control->getSettings()->save();
     }
 
     auto* win = new MainWindow(gladePath, control);
@@ -340,15 +379,18 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
             XojMsgBox::showErrorToUser(static_cast<GtkWindow*>(*win), msg);
         }
 
-        GFile* file = g_file_new_for_commandline_arg(optFilename[0]);
-        Path p = Path::fromGFile(file);
-        g_object_unref(file);
+        fs::path p(optFilename[0]);
 
-        if (!p.isEmpty()) {
-            opened = control->openFile(p, openAtPageNumber);
-        } else {
-            string msg = _("Sorry, Xournal++ cannot open remote files at the moment.\n"
-                           "You have to copy the file to a local directory.");
+        try {
+            if (fs::exists(p)) {
+                opened = control->openFile(p, openAtPageNumber);
+            } else {
+                opened = control->newFile("", optFilename[0]);
+            }
+        } catch (fs::filesystem_error const& e) {
+            string msg = FS(_F("Sorry, Xournal++ cannot open remote files at the moment.\n"
+                               "You have to copy the file to a local directory.") %
+                            p.u8string().c_str() % e.what());
             XojMsgBox::showErrorToUser(static_cast<GtkWindow*>(*win), msg);
         }
     }
@@ -365,6 +407,10 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
     // There is a timing issue with the layout
     // This fixes it, see #405
     Util::execInUiThread([=]() { control->getWindow()->getXournal()->layoutPages(); });
+
+    if (migrateResult.status != MigrateStatus::NotNeeded) {
+        Util::execInUiThread([=]() { XojMsgBox::showErrorToUser(control->getGtkWindow(), migrateResult.message); });
+    }
 
     gtk_main();
 
@@ -388,81 +434,81 @@ auto XournalMain::run(int argc, char* argv[]) -> int {
  * Find a file in a resource folder, and return the resource folder path
  * Return an empty string, if the folder was not found
  */
-auto XournalMain::findResourcePath(const string& searchFile) -> string {
+auto XournalMain::findResourcePath(const string& searchFile) -> fs::path {
     // First check if the files are available relative to the path
     // So a "portable" installation will be possible
-    Path relative1 = searchFile;
+    fs::path relative1 = searchFile;
 
-    if (relative1.exists()) {
-        return relative1.getParentPath().str();
+    if (fs::exists(relative1)) {
+        return relative1.parent_path();
     }
 
     // -----------------------------------------------------------------------
 
     // Check if we are in the "build" directory, and therefore the resources
     // are installed two folders back
-    Path relative2 = "../..";
+    fs::path relative2 = "../..";
     relative2 /= searchFile;
 
-    if (relative2.exists()) {
-        return relative2.getParentPath().str();
+    if (fs::exists(relative2)) {
+        return relative2.parent_path();
     }
 
     // -----------------------------------------------------------------------
 
-    Path executableDir = Stacktrace::getExePath();
-    executableDir = executableDir.getParentPath();
+    fs::path executableDir = Stacktrace::getExePath();
+    executableDir = executableDir.parent_path();
 
     // First check if the files are available relative to the executable
     // So a "portable" installation will be possible
-    Path relative3 = executableDir;
+    fs::path relative3 = executableDir;
     relative3 /= searchFile;
 
-    if (relative3.exists()) {
-        return relative3.getParentPath().str();
+    if (fs::exists(relative3)) {
+        return relative3.parent_path();
     }
 
     // -----------------------------------------------------------------------
 
     // Check one folder back, for windows portable
-    Path relative4 = executableDir;
+    fs::path relative4 = executableDir;
     relative4 /= "..";
     relative4 /= searchFile;
 
-    if (relative4.exists()) {
-        return relative4.getParentPath().str();
+    if (fs::exists(relative4)) {
+        return relative4.parent_path();
     }
 
     // -----------------------------------------------------------------------
 
     // Check if we are in the "build" directory, and therefore the resources
     // are installed two folders back
-    Path relative5 = executableDir;
+    fs::path relative5 = executableDir;
     relative5 /= "../..";
     relative5 /= searchFile;
 
-    if (relative5.exists()) {
-        return relative5.getParentPath().str();
+    if (fs::exists(relative5)) {
+        return relative5.parent_path();
     }
 
     // -----------------------------------------------------------------------
 
     // Check for .../share resources directory relative to binary to support
     // relocatable installations (such as e.g., AppImages)
-    Path relative6 = executableDir;
+    fs::path relative6 = executableDir;
     relative6 /= "../share/xournalpp/";
     relative6 /= searchFile;
 
-    if (relative6.exists()) {
-        return relative6.getParentPath().str();
+    if (fs::exists(relative6)) {
+        return relative6.parent_path();
     }
 
     // Not found
-    return "";
+    return {};
 }
 
 void XournalMain::initResourcePath(GladeSearchpath* gladePath, const gchar* relativePathAndFile, bool failIfNotFound) {
-    string uiPath = findResourcePath(relativePathAndFile);  // i.e.  relativePathAndFile = "ui/about.glade"
+    auto uiPath = findResourcePath(relativePathAndFile);  // i.e.  relativePathAndFile = "ui/about.glade"
 
     if (!uiPath.empty()) {
         gladePath->addSearchDirectory(uiPath);
@@ -472,17 +518,17 @@ void XournalMain::initResourcePath(GladeSearchpath* gladePath, const gchar* rela
     // -----------------------------------------------------------------------
 
 #ifdef __APPLE__
-    Path p = Stacktrace::getExePath();
+    fs::path p = Stacktrace::getExePath();
     p /= "../Resources";
     p /= relativePathAndFile;
 
-    if (p.exists()) {
-        gladePath->addSearchDirectory(p.getParentPath().str());
+    if (fs::exists(p)) {
+        gladePath->addSearchDirectory(p.parent_path());
         return;
     }
 
     string msg =
-            FS(_F("Missing the needed UI file:\n{1}\n .app corrupted?\nPath: {2}") % relativePathAndFile % p.str());
+            FS(_F("Missing the needed UI file:\n{1}\n .app corrupted?\nPath: {2}") % relativePathAndFile % p.string());
 
     if (!failIfNotFound) {
         msg += _("\nWill now attempt to run without this file.");
@@ -490,12 +536,12 @@ void XournalMain::initResourcePath(GladeSearchpath* gladePath, const gchar* rela
     XojMsgBox::showErrorToUser(nullptr, msg);
 #else
     // Check at the target installation directory
-    Path absolute = PACKAGE_DATA_DIR;
+    fs::path absolute = PACKAGE_DATA_DIR;
     absolute /= PROJECT_PACKAGE;
     absolute /= relativePathAndFile;
 
-    if (absolute.exists()) {
-        gladePath->addSearchDirectory(absolute.getParentPath().str());
+    if (fs::exists(absolute)) {
+        gladePath->addSearchDirectory(absolute.parent_path().string());
         return;
     }
 

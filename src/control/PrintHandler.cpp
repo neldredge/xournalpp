@@ -6,7 +6,7 @@
 #include "model/Document.h"
 #include "view/DocumentView.h"
 
-#include "Util.h"
+#include "PathUtil.h"
 
 PrintHandler::PrintHandler() = default;
 
@@ -16,7 +16,7 @@ void PrintHandler::drawPage(GtkPrintOperation* operation, GtkPrintContext* conte
     cairo_t* cr = gtk_print_context_get_cairo_context(context);
 
     PageRef page = handler->doc->getPage(pageNr);
-    if (!page.isValid()) {
+    if (!page) {
         return;
     }
 
@@ -43,7 +43,7 @@ void PrintHandler::drawPage(GtkPrintOperation* operation, GtkPrintContext* conte
 void PrintHandler::requestPageSetup(GtkPrintOperation* operation, GtkPrintContext* context, gint pageNr,
                                     GtkPageSetup* setup, PrintHandler* handler) {
     PageRef page = handler->doc->getPage(pageNr);
-    if (!page.isValid()) {
+    if (!page) {
         return;
     }
 
@@ -62,9 +62,9 @@ void PrintHandler::requestPageSetup(GtkPrintOperation* operation, GtkPrintContex
 }
 
 void PrintHandler::print(Document* doc, int currentPage) {
-    Path filename = Util::getConfigFile(PRINT_CONFIG_FILE);
+    auto filepath = Util::getConfigFile(PRINT_CONFIG_FILE);
 
-    GtkPrintSettings* settings = gtk_print_settings_new_from_file(filename.c_str(), nullptr);
+    GtkPrintSettings* settings = gtk_print_settings_new_from_file(filepath.u8string().c_str(), nullptr);
 
     if (settings == nullptr) {
         settings = gtk_print_settings_new();
@@ -87,7 +87,7 @@ void PrintHandler::print(Document* doc, int currentPage) {
     if (res == GTK_PRINT_OPERATION_RESULT_APPLY) {
         g_object_unref(settings);
         settings = gtk_print_operation_get_print_settings(op);
-        gtk_print_settings_to_file(settings, filename.c_str(), nullptr);
+        gtk_print_settings_to_file(settings, filepath.u8string().c_str(), nullptr);
 
         settings = nullptr;
     }

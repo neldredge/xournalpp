@@ -2,28 +2,27 @@
 
 #include <utility>
 
-#include <config.h>
-
 #include "model/FormatDefinitions.h"
 #include "util/DeviceListHelper.h"
 
 #include "ButtonConfig.h"
 #include "Util.h"
+#include "filesystem.h"
 #include "i18n.h"
-#define DEFAULT_FONT "Sans"
-#define DEFAULT_FONT_SIZE 12
+
+constexpr auto const* DEFAULT_FONT = "Sans";
+constexpr auto DEFAULT_FONT_SIZE = 12;
 
 #define WRITE_BOOL_PROP(var) xmlNode = saveProperty((const char*)#var, (var) ? "true" : "false", root)
 #define WRITE_STRING_PROP(var) xmlNode = saveProperty((const char*)#var, (var).empty() ? "" : (var).c_str(), root)
 #define WRITE_INT_PROP(var) xmlNode = saveProperty((const char*)#var, var, root)
+#define WRITE_UINT_PROP(var) xmlNode = savePropertyUnsigned((const char*)#var, var, root)
 #define WRITE_DOUBLE_PROP(var) xmlNode = savePropertyDouble((const char*)#var, var, root)
 #define WRITE_COMMENT(var)                      \
     com = xmlNewComment((const xmlChar*)(var)); \
     xmlAddPrevSibling(xmlNode, com);
 
-const char* BUTTON_NAMES[] = {"middle", "right", "eraser", "touch", "default", "stylus", "stylus2"};
-
-Settings::Settings(Path filename): filename(std::move(filename)) { loadDefault(); }
+Settings::Settings(fs::path filepath): filepath(std::move(filepath)) { loadDefault(); }
 
 Settings::~Settings() {
     for (auto& i: this->buttonConfig) {
@@ -63,6 +62,8 @@ void Settings::loadDefault() {
     this->showSidebar = true;
     this->sidebarWidth = 150;
 
+    this->showToolbar = true;
+
     this->sidebarOnRight = false;
 
     this->scrollbarOnLeft = false;
@@ -70,8 +71,12 @@ void Settings::loadDefault() {
     this->menubarVisible = true;
 
     this->autoloadPdfXoj = true;
-    this->showBigCursor = false;
+    this->stylusCursorType = STYLUS_CURSOR_DOT;
     this->highlightPosition = false;
+    this->cursorHighlightColor = 0x80FFFF00;  // Yellow with 50% opacity
+    this->cursorHighlightRadius = 30.0;
+    this->cursorHighlightBorderColor = 0x800000FF;  // Blue with 50% opacity
+    this->cursorHighlightBorderWidth = 0.0;
     this->darkTheme = false;
     this->scrollbarHideType = SCROLLBAR_HIDE_NONE;
     this->disableScrollbarFadeout = false;
@@ -90,39 +95,47 @@ void Settings::loadDefault() {
     this->drawDirModsEnabled = false;
 
     this->snapRotation = true;
-    this->snapRotationTolerance = 0.20;
+    this->snapRotationTolerance = 0.30;
 
     this->snapGrid = true;
-    this->snapGridTolerance = 0.25;
+    this->snapGridTolerance = 0.50;
+    this->snapGridSize = DEFAULT_GRID_SIZE;
 
     this->touchWorkaround = false;
 
     this->defaultSaveName = _("%F-Note-%H-%M");
 
     // Eraser
-    this->buttonConfig[0] = new ButtonConfig(TOOL_ERASER, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_ERASER] =
+            new ButtonConfig(TOOL_ERASER, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Middle button
-    this->buttonConfig[1] = new ButtonConfig(TOOL_NONE, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_MIDDLE] =
+            new ButtonConfig(TOOL_NONE, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Right button
-    this->buttonConfig[2] = new ButtonConfig(TOOL_NONE, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_RIGHT] =
+            new ButtonConfig(TOOL_NONE, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Touch
-    this->buttonConfig[3] = new ButtonConfig(TOOL_NONE, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_TOUCH] =
+            new ButtonConfig(TOOL_NONE, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Default config
-    this->buttonConfig[4] = new ButtonConfig(TOOL_PEN, 0, TOOL_SIZE_FINE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_DEFAULT] =
+            new ButtonConfig(TOOL_PEN, Color{0x000000U}, TOOL_SIZE_FINE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Pen button 1
-    this->buttonConfig[5] = new ButtonConfig(TOOL_NONE, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_STYLUS] =
+            new ButtonConfig(TOOL_NONE, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
     // Pen button 2
-    this->buttonConfig[6] = new ButtonConfig(TOOL_NONE, 0, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
+    this->buttonConfig[BUTTON_STYLUS2] =
+            new ButtonConfig(TOOL_NONE, Color{0x000000U}, TOOL_SIZE_NONE, DRAWING_TYPE_DEFAULT, ERASER_TYPE_NONE);
 
     this->fullscreenHideElements = "mainMenubar";
     this->presentationHideElements = "mainMenubar,sidebarContents";
 
     this->pdfPageCacheSize = 10;
 
-    this->selectionBorderColor = 0xff0000;  // red
-    this->selectionMarkerColor = 0x729FCF;  // light blue
+    this->selectionBorderColor = 0xff0000U;  // red
+    this->selectionMarkerColor = 0x729fcfU;  // light blue
 
-    this->backgroundColor = 0xDCDAD5;
+    this->backgroundColor = 0xdcdad5U;
 
     // clang-format off
 	this->pageTemplate = "xoj/template\ncopyLastPageSettings=true\nsize=595.275591x841.889764\nbackgroundType=lined\nbackgroundColor=#ffffff\n";
@@ -137,6 +150,8 @@ void Settings::loadDefault() {
     this->pluginEnabled = "";
     this->pluginDisabled = "";
 
+    this->numIgnoredStylusEvents = 0;
+
     this->newInputSystemEnabled = true;
     this->inputSystemTPCButton = false;
     this->inputSystemDrawOutsideWindow = true;
@@ -147,6 +162,9 @@ void Settings::loadDefault() {
     this->strokeFilterEnabled = false;
     this->doActionOnStrokeFiltered = false;
     this->trySelectOnStrokeFiltered = false;
+
+    this->snapRecognizedShapesEnabled = false;
+    this->restoreLineWidthEnabled = false;
 
     this->inTransaction = false;
 }
@@ -256,10 +274,8 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
             if (sscanf(reinterpret_cast<const char*>(size), "%lf", &dSize) == 1) {
                 this->font.setSize(dSize);
             }
-
             xmlFree(size);
         }
-
         return;
     }
 
@@ -298,6 +314,8 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
         this->mainWndHeight = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("maximized")) == 0) {
         this->maximized = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("showToolbar")) == 0) {
+        this->showToolbar = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("showSidebar")) == 0) {
         this->showSidebar = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("sidebarWidth")) == 0) {
@@ -328,10 +346,18 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
         this->presentationMode = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("autoloadPdfXoj")) == 0) {
         this->autoloadPdfXoj = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
-    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("showBigCursor")) == 0) {
-        this->showBigCursor = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("stylusCursorType")) == 0) {
+        this->stylusCursorType = stylusCursorTypeFromString(reinterpret_cast<const char*>(value));
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("highlightPosition")) == 0) {
         this->highlightPosition = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("cursorHighlightColor")) == 0) {
+        this->cursorHighlightColor = g_ascii_strtoull(reinterpret_cast<const char*>(value), nullptr, 10);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("cursorHighlightRadius")) == 0) {
+        this->cursorHighlightRadius = g_ascii_strtod(reinterpret_cast<const char*>(value), nullptr);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("cursorHighlightBorderColor")) == 0) {
+        this->cursorHighlightBorderColor = g_ascii_strtoull(reinterpret_cast<const char*>(value), nullptr, 10);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("cursorHighlightBorderWidth")) == 0) {
+        this->cursorHighlightBorderWidth = g_ascii_strtod(reinterpret_cast<const char*>(value), nullptr);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("darkTheme")) == 0) {
         this->darkTheme = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("defaultSaveName")) == 0) {
@@ -357,11 +383,11 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("pdfPageCacheSize")) == 0) {
         this->pdfPageCacheSize = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("selectionBorderColor")) == 0) {
-        this->selectionBorderColor = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
+        this->selectionBorderColor = Color(g_ascii_strtoull(reinterpret_cast<const char*>(value), nullptr, 10));
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("selectionMarkerColor")) == 0) {
-        this->selectionMarkerColor = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
+        this->selectionMarkerColor = Color(g_ascii_strtoull(reinterpret_cast<const char*>(value), nullptr, 10));
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("backgroundColor")) == 0) {
-        this->backgroundColor = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
+        this->backgroundColor = Color(g_ascii_strtoull(reinterpret_cast<const char*>(value), nullptr, 10));
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("addHorizontalSpace")) == 0) {
         this->addHorizontalSpace = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("addHorizontalSpaceAmount")) == 0) {
@@ -380,8 +406,8 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
         this->snapRotationTolerance = tempg_ascii_strtod(reinterpret_cast<const char*>(value), nullptr);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("snapGrid")) == 0) {
         this->snapGrid = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
-    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("snapGrid")) == 0) {
-        this->snapGrid = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("snapGridSize")) == 0) {
+        this->snapGridSize = tempg_ascii_strtod(reinterpret_cast<const char*>(value), nullptr);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("snapGridTolerance")) == 0) {
         this->snapGridTolerance = tempg_ascii_strtod(reinterpret_cast<const char*>(value), nullptr);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("touchWorkaround")) == 0) {
@@ -408,6 +434,9 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
         this->audioInputDevice = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("audioOutputDevice")) == 0) {
         this->audioOutputDevice = g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("numIgnoredStylusEvents")) == 0) {
+        this->numIgnoredStylusEvents =
+                std::max<int>(g_ascii_strtoll(reinterpret_cast<const char*>(value), nullptr, 10), 0);
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("newInputSystemEnabled")) == 0) {
         this->newInputSystemEnabled = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("inputSystemTPCButton")) == 0) {
@@ -426,6 +455,19 @@ void Settings::parseItem(xmlDocPtr doc, xmlNodePtr cur) {
         this->doActionOnStrokeFiltered = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
     } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("trySelectOnStrokeFiltered")) == 0) {
         this->trySelectOnStrokeFiltered = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("latexSettings.autoCheckDependencies")) == 0) {
+        this->latexSettings.autoCheckDependencies = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("latexSettings.globalTemplatePath")) == 0) {
+        std::string v(reinterpret_cast<char*>(value));
+        this->latexSettings.globalTemplatePath = fs::u8path(v);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("latexSettings.genCmd")) == 0) {
+        this->latexSettings.genCmd = reinterpret_cast<char*>(value);
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("snapRecognizedShapesEnabled")) == 0) {
+        this->snapRecognizedShapesEnabled = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("restoreLineWidthEnabled")) == 0) {
+        this->restoreLineWidthEnabled = xmlStrcmp(value, reinterpret_cast<const xmlChar*>("true")) == 0;
+    } else if (xmlStrcmp(name, reinterpret_cast<const xmlChar*>("preferredLocale")) == 0) {
+        this->preferredLocale = reinterpret_cast<char*>(value);
     }
 
     xmlFree(name);
@@ -449,7 +491,7 @@ void Settings::loadButtonConfig() {
     SElement& s = getCustomElement("buttonConfig");
 
     for (int i = 0; i < BUTTON_COUNT; i++) {
-        SElement& e = s.child(BUTTON_NAMES[i]);
+        SElement& e = s.child(buttonToString(static_cast<Buttons>(i)));
         ButtonConfig* cfg = buttonConfig[i];
 
         string sType;
@@ -473,7 +515,9 @@ void Settings::loadButtonConfig() {
             }
 
             if (type == TOOL_PEN || type == TOOL_HILIGHTER || type == TOOL_TEXT) {
-                e.getInt("color", cfg->color);
+                if (int iColor; e.getInt("color", iColor)) {
+                    cfg->color = Color(iColor);
+                }
             }
 
             if (type == TOOL_ERASER) {
@@ -495,7 +539,7 @@ void Settings::loadButtonConfig() {
             }
 
             // Touch device
-            if (i == 3) {
+            if (i == BUTTON_TOUCH) {
                 if (!e.getString("device", cfg->device)) {
                     cfg->device = "";
                 }
@@ -511,12 +555,12 @@ void Settings::loadButtonConfig() {
 auto Settings::load() -> bool {
     xmlKeepBlanksDefault(0);
 
-    if (!filename.exists()) {
-        g_warning("configfile does not exist %s\n", filename.c_str());
+    if (!fs::exists(filepath)) {
+        g_warning("configfile does not exist %s\n", filepath.string().c_str());
         return false;
     }
 
-    xmlDocPtr doc = xmlParseFile(filename.c_str());
+    xmlDocPtr doc = xmlParseFile(filepath.u8string().c_str());
 
     if (doc == nullptr) {
         g_warning("Settings::load:: doc == null, could not load Settings!\n");
@@ -525,14 +569,14 @@ auto Settings::load() -> bool {
 
     xmlNodePtr cur = xmlDocGetRootElement(doc);
     if (cur == nullptr) {
-        g_message("The settings file \"%s\" is empty", filename.c_str());
+        g_message("The settings file \"%s\" is empty", filepath.string().c_str());
         xmlFreeDoc(doc);
 
         return false;
     }
 
     if (xmlStrcmp(cur->name, reinterpret_cast<const xmlChar*>("settings"))) {
-        g_message("File \"%s\" is of the wrong type", filename.c_str());
+        g_message("File \"%s\" is of the wrong type", filepath.string().c_str());
         xmlFreeDoc(doc);
 
         return false;
@@ -570,6 +614,13 @@ auto Settings::saveProperty(const gchar* key, int value, xmlNodePtr parent) -> x
     return xmlNode;
 }
 
+auto Settings::savePropertyUnsigned(const gchar* key, unsigned int value, xmlNodePtr parent) -> xmlNodePtr {
+    char* text = g_strdup_printf("%u", value);
+    xmlNodePtr xmlNode = saveProperty(key, text, parent);
+    g_free(text);
+    return xmlNode;
+}
+
 auto Settings::saveProperty(const gchar* key, const gchar* value, xmlNodePtr parent) -> xmlNodePtr {
     xmlNodePtr xmlNode = xmlNewChild(parent, nullptr, reinterpret_cast<const xmlChar*>("property"), nullptr);
 
@@ -598,7 +649,7 @@ void Settings::saveButtonConfig() {
     s.clear();
 
     for (int i = 0; i < BUTTON_COUNT; i++) {
-        SElement& e = s.child(BUTTON_NAMES[i]);
+        SElement& e = s.child(buttonToString(static_cast<Buttons>(i)));
         ButtonConfig* cfg = buttonConfig[i];
 
         ToolType type = cfg->action;
@@ -610,7 +661,7 @@ void Settings::saveButtonConfig() {
         }  // end if pen or highlighter
 
         if (type == TOOL_PEN || type == TOOL_HILIGHTER || type == TOOL_TEXT) {
-            e.setIntHex("color", cfg->color);
+            e.setIntHex("color", int32_t(cfg->color));
         }
 
         if (type == TOOL_ERASER) {
@@ -619,7 +670,7 @@ void Settings::saveButtonConfig() {
         }
 
         // Touch device
-        if (i == 3) {
+        if (i == BUTTON_TOUCH) {
             e.setString("device", cfg->device);
             e.setBool("disableDrawing", cfg->disableDrawing);
         }
@@ -672,9 +723,9 @@ void Settings::save() {
 
     WRITE_STRING_PROP(selectedToolbar);
 
-    auto lastSavePath = this->lastSavePath.str();
-    auto lastOpenPath = this->lastOpenPath.str();
-    auto lastImagePath = this->lastImagePath.str();
+    auto lastSavePath = this->lastSavePath.string();
+    auto lastOpenPath = this->lastOpenPath.string();
+    auto lastImagePath = this->lastImagePath.string();
     WRITE_STRING_PROP(lastSavePath);
     WRITE_STRING_PROP(lastOpenPath);
     WRITE_STRING_PROP(lastImagePath);
@@ -685,6 +736,8 @@ void Settings::save() {
     WRITE_INT_PROP(mainWndWidth);
     WRITE_INT_PROP(mainWndHeight);
     WRITE_BOOL_PROP(maximized);
+
+    WRITE_BOOL_PROP(showToolbar);
 
     WRITE_BOOL_PROP(showSidebar);
     WRITE_INT_PROP(sidebarWidth);
@@ -708,8 +761,14 @@ void Settings::save() {
     WRITE_STRING_PROP(presentationHideElements);
     WRITE_COMMENT("Which gui elements are hidden if you are in Presentation mode, separated by a colon (,)");
 
-    WRITE_BOOL_PROP(showBigCursor);
+    xmlNode = saveProperty("stylusCursorType", stylusCursorTypeToString(this->stylusCursorType), root);
+    WRITE_COMMENT("The cursor icon used with a stylus, allowed values are \"none\", \"dot\", \"big\"");
+
     WRITE_BOOL_PROP(highlightPosition);
+    WRITE_UINT_PROP(cursorHighlightColor);
+    WRITE_UINT_PROP(cursorHighlightBorderColor);
+    WRITE_DOUBLE_PROP(cursorHighlightRadius);
+    WRITE_DOUBLE_PROP(cursorHighlightBorderWidth);
     WRITE_BOOL_PROP(darkTheme);
 
     WRITE_BOOL_PROP(disableScrollbarFadeout);
@@ -746,12 +805,13 @@ void Settings::save() {
     WRITE_DOUBLE_PROP(snapRotationTolerance);
     WRITE_BOOL_PROP(snapGrid);
     WRITE_DOUBLE_PROP(snapGridTolerance);
+    WRITE_DOUBLE_PROP(snapGridSize);
 
     WRITE_BOOL_PROP(touchWorkaround);
 
-    WRITE_INT_PROP(selectionBorderColor);
-    WRITE_INT_PROP(backgroundColor);
-    WRITE_INT_PROP(selectionMarkerColor);
+    WRITE_UINT_PROP(selectionBorderColor);
+    WRITE_UINT_PROP(backgroundColor);
+    WRITE_UINT_PROP(selectionMarkerColor);
 
     WRITE_INT_PROP(pdfPageCacheSize);
     WRITE_COMMENT("The count of rendered PDF pages which will be cached.");
@@ -774,14 +834,28 @@ void Settings::save() {
     WRITE_INT_PROP(strokeFilterIgnoreTime);
     WRITE_DOUBLE_PROP(strokeFilterIgnoreLength);
     WRITE_INT_PROP(strokeFilterSuccessiveTime);
-
     WRITE_BOOL_PROP(strokeFilterEnabled);
     WRITE_BOOL_PROP(doActionOnStrokeFiltered);
     WRITE_BOOL_PROP(trySelectOnStrokeFiltered);
 
+    WRITE_BOOL_PROP(snapRecognizedShapesEnabled);
+    WRITE_BOOL_PROP(restoreLineWidthEnabled);
+
+    WRITE_INT_PROP(numIgnoredStylusEvents);
+
     WRITE_BOOL_PROP(newInputSystemEnabled);
     WRITE_BOOL_PROP(inputSystemTPCButton);
     WRITE_BOOL_PROP(inputSystemDrawOutsideWindow);
+
+    WRITE_STRING_PROP(preferredLocale);
+
+    WRITE_BOOL_PROP(latexSettings.autoCheckDependencies);
+    // Inline WRITE_STRING_PROP(latexSettings.globalTemplatePath) since it
+    // breaks on Windows due to the native character representation being
+    // wchar_t instead of char
+    fs::path& p = latexSettings.globalTemplatePath;
+    xmlNode = saveProperty("latexSettings.globalTemplatePath", p.empty() ? "" : p.u8string().c_str(), root);
+    WRITE_STRING_PROP(latexSettings.genCmd);
 
     xmlNodePtr xmlFont = nullptr;
     xmlFont = xmlNewChild(root, nullptr, reinterpret_cast<const xmlChar*>("property"), nullptr);
@@ -799,7 +873,7 @@ void Settings::save() {
         saveData(root, p.first, p.second);
     }
 
-    xmlSaveFormatFileEnc(filename.c_str(), doc, "UTF-8", 1);
+    xmlSaveFormatFileEnc(filepath.u8string().c_str(), doc, "UTF-8", 1);
     xmlFreeDoc(doc);
 }
 
@@ -980,15 +1054,15 @@ void Settings::setDrawDirModsRadius(int pixels) {
     save();
 }
 
+auto Settings::getStylusCursorType() const -> StylusCursorType { return this->stylusCursorType; }
 
-auto Settings::isShowBigCursor() const -> bool { return this->showBigCursor; }
-
-void Settings::setShowBigCursor(bool b) {
-    if (this->showBigCursor == b) {
+void Settings::setStylusCursorType(StylusCursorType type) {
+    if (this->stylusCursorType == type) {
         return;
     }
 
-    this->showBigCursor = b;
+    this->stylusCursorType = type;
+
     save();
 }
 
@@ -1001,6 +1075,42 @@ void Settings::setHighlightPosition(bool highlight) {
 
     this->highlightPosition = highlight;
     save();
+}
+
+auto Settings::getCursorHighlightColor() const -> Color { return this->cursorHighlightColor; }
+
+void Settings::setCursorHighlightColor(Color color) {
+    if (this->cursorHighlightColor != color) {
+        this->cursorHighlightColor = color;
+        save();
+    }
+}
+
+auto Settings::getCursorHighlightRadius() const -> double { return this->cursorHighlightRadius; }
+
+void Settings::setCursorHighlightRadius(double radius) {
+    if (this->cursorHighlightRadius != radius) {
+        this->cursorHighlightRadius = radius;
+        save();
+    }
+}
+
+auto Settings::getCursorHighlightBorderColor() const -> Color { return this->cursorHighlightBorderColor; }
+
+void Settings::setCursorHighlightBorderColor(Color color) {
+    if (this->cursorHighlightBorderColor != color) {
+        this->cursorHighlightBorderColor = color;
+        save();
+    }
+}
+
+auto Settings::getCursorHighlightBorderWidth() const -> double { return this->cursorHighlightBorderWidth; }
+
+void Settings::setCursorHighlightBorderWidth(double radius) {
+    if (this->cursorHighlightBorderWidth != radius) {
+        this->cursorHighlightBorderWidth = radius;
+        save();
+    }
 }
 
 auto Settings::isSnapRotation() const -> bool { return this->snapRotation; }
@@ -1038,6 +1148,14 @@ void Settings::setSnapGridTolerance(double tolerance) {
 }
 
 auto Settings::getSnapGridTolerance() const -> double { return this->snapGridTolerance; }
+auto Settings::getSnapGridSize() const -> double { return this->snapGridSize; };
+void Settings::setSnapGridSize(double gridSize) {
+    if (this->snapGridSize == gridSize) {
+        return;
+    }
+    this->snapGridSize = gridSize;
+    save();
+}
 
 auto Settings::isTouchWorkaround() const -> bool { return this->touchWorkaround; }
 
@@ -1255,21 +1373,21 @@ void Settings::setViewLayoutB2T(bool b2t) {
 
 auto Settings::getViewLayoutB2T() const -> bool { return this->layoutBottomToTop; }
 
-void Settings::setLastSavePath(Path p) {
+void Settings::setLastSavePath(fs::path p) {
     this->lastSavePath = std::move(p);
     save();
 }
 
-auto Settings::getLastSavePath() const -> Path const& { return this->lastSavePath; }
+auto Settings::getLastSavePath() const -> fs::path const& { return this->lastSavePath; }
 
-void Settings::setLastOpenPath(Path p) {
+void Settings::setLastOpenPath(fs::path p) {
     this->lastOpenPath = std::move(p);
     save();
 }
 
-auto Settings::getLastOpenPath() const -> Path const& { return this->lastOpenPath; }
+auto Settings::getLastOpenPath() const -> fs::path const& { return this->lastOpenPath; }
 
-void Settings::setLastImagePath(const Path& path) {
+void Settings::setLastImagePath(const fs::path& path) {
     if (this->lastImagePath == path) {
         return;
     }
@@ -1277,7 +1395,7 @@ void Settings::setLastImagePath(const Path& path) {
     save();
 }
 
-auto Settings::getLastImagePath() const -> Path const& { return this->lastImagePath; }
+auto Settings::getLastImagePath() const -> fs::path const& { return this->lastImagePath; }
 
 void Settings::setZoomStep(double zoomStep) {
     if (this->zoomStep == zoomStep) {
@@ -1326,6 +1444,16 @@ void Settings::setSidebarVisible(bool visible) {
         return;
     }
     this->showSidebar = visible;
+    save();
+}
+
+auto Settings::isToolbarVisible() const -> bool { return this->showToolbar; }
+
+void Settings::setToolbarVisible(bool visible) {
+    if (this->showToolbar == visible) {
+        return;
+    }
+    this->showToolbar = visible;
     save();
 }
 
@@ -1378,19 +1506,19 @@ auto Settings::getButtonConfig(int id) -> ButtonConfig* {
     return this->buttonConfig[id];
 }
 
-auto Settings::getEraserButtonConfig() -> ButtonConfig* { return this->buttonConfig[0]; }
+auto Settings::getEraserButtonConfig() -> ButtonConfig* { return this->buttonConfig[BUTTON_ERASER]; }
 
-auto Settings::getMiddleButtonConfig() -> ButtonConfig* { return this->buttonConfig[1]; }
+auto Settings::getMiddleButtonConfig() -> ButtonConfig* { return this->buttonConfig[BUTTON_MIDDLE]; }
 
-auto Settings::getRightButtonConfig() -> ButtonConfig* { return this->buttonConfig[2]; }
+auto Settings::getRightButtonConfig() -> ButtonConfig* { return this->buttonConfig[BUTTON_RIGHT]; }
 
-auto Settings::getTouchButtonConfig() -> ButtonConfig* { return this->buttonConfig[3]; }
+auto Settings::getTouchButtonConfig() -> ButtonConfig* { return this->buttonConfig[BUTTON_TOUCH]; }
 
-auto Settings::getDefaultButtonConfig() -> ButtonConfig* { return this->buttonConfig[4]; }
+auto Settings::getDefaultButtonConfig() -> ButtonConfig* { return this->buttonConfig[BUTTON_DEFAULT]; }
 
-auto Settings::getStylusButton1Config() -> ButtonConfig* { return this->buttonConfig[5]; }
+auto Settings::getStylusButton1Config() -> ButtonConfig* { return this->buttonConfig[BUTTON_STYLUS]; }
 
-auto Settings::getStylusButton2Config() -> ButtonConfig* { return this->buttonConfig[6]; }
+auto Settings::getStylusButton2Config() -> ButtonConfig* { return this->buttonConfig[BUTTON_STYLUS2]; }
 
 auto Settings::getFullscreenHideElements() const -> string const& { return this->fullscreenHideElements; }
 
@@ -1416,9 +1544,9 @@ void Settings::setPdfPageCacheSize(int size) {
     save();
 }
 
-auto Settings::getBorderColor() const -> int { return this->selectionBorderColor; }
+auto Settings::getBorderColor() const -> Color { return this->selectionBorderColor; }
 
-void Settings::setBorderColor(int color) {
+void Settings::setBorderColor(Color color) {
     if (this->selectionBorderColor == color) {
         return;
     }
@@ -1426,9 +1554,9 @@ void Settings::setBorderColor(int color) {
     save();
 }
 
-auto Settings::getSelectionColor() const -> int { return this->selectionMarkerColor; }
+auto Settings::getSelectionColor() const -> Color { return this->selectionMarkerColor; }
 
-void Settings::setSelectionColor(int color) {
+void Settings::setSelectionColor(Color color) {
     if (this->selectionMarkerColor == color) {
         return;
     }
@@ -1436,9 +1564,9 @@ void Settings::setSelectionColor(int color) {
     save();
 }
 
-auto Settings::getBackgroundColor() const -> int { return this->backgroundColor; }
+auto Settings::getBackgroundColor() const -> Color { return this->backgroundColor; }
 
-void Settings::setBackgroundColor(int color) {
+void Settings::setBackgroundColor(Color color) {
     if (this->backgroundColor == color) {
         return;
     }
@@ -1548,6 +1676,29 @@ auto Settings::getDoActionOnStrokeFiltered() const -> bool { return this->doActi
 void Settings::setTrySelectOnStrokeFiltered(bool enabled) { this->trySelectOnStrokeFiltered = enabled; }
 
 auto Settings::getTrySelectOnStrokeFiltered() const -> bool { return this->trySelectOnStrokeFiltered; }
+
+void Settings::setSnapRecognizedShapesEnabled(bool enabled) { this->snapRecognizedShapesEnabled = enabled; }
+
+auto Settings::getSnapRecognizedShapesEnabled() const -> bool { return this->snapRecognizedShapesEnabled; }
+
+
+void Settings::setRestoreLineWidthEnabled(bool enabled) { this->restoreLineWidthEnabled = enabled; }
+
+auto Settings::getRestoreLineWidthEnabled() const -> bool { return this->restoreLineWidthEnabled; }
+
+auto Settings::setPreferredLocale(std::string const& locale) -> void { this->preferredLocale = locale; }
+
+auto Settings::getPreferredLocale() const -> std::string { return this->preferredLocale; }
+
+void Settings::setIgnoredStylusEvents(int numEvents) {
+    if (this->numIgnoredStylusEvents == numEvents) {
+        return;
+    }
+    this->numIgnoredStylusEvents = std::max<int>(numEvents, 0);
+    save();
+}
+
+auto Settings::getIgnoredStylusEvents() const -> int { return this->numIgnoredStylusEvents; }
 
 
 void Settings::setExperimentalInputSystemEnabled(bool systemEnabled) {
@@ -1674,39 +1825,6 @@ SAttribute::~SAttribute() {
 }
 
 //////////////////////////////////////////////////
-
-__RefSElement::__RefSElement() { this->refcount = 0; }
-
-__RefSElement::~__RefSElement() = default;
-
-void __RefSElement::ref() { this->refcount++; }
-
-void __RefSElement::unref() {
-    this->refcount--;
-    if (this->refcount == 0) {
-        delete this;
-    }
-}
-
-SElement::SElement() {
-    this->element = new __RefSElement();
-    this->element->ref();
-}
-
-SElement::SElement(const SElement& elem) {
-    this->element = elem.element;
-    this->element->ref();
-}
-
-SElement::~SElement() {
-    this->element->unref();
-    this->element = nullptr;
-}
-
-void SElement::operator=(const SElement& elem) {
-    this->element = elem.element;
-    this->element->ref();
-}
 
 auto SElement::attributes() -> std::map<string, SAttribute>& { return this->element->attributes; }
 

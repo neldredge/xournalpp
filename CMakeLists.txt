@@ -19,6 +19,7 @@ set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/find" "${PROJECT_SOURCE_DIR}/
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set_directory_properties(PROPERTIES EP_BASE "${PROJECT_BINARY_DIR}/external")
 
 add_definitions(-D_USE_MATH_DEFINES)
 
@@ -27,6 +28,9 @@ include (Version)
 core_find_git_rev(RELEASE_IDENTIFIER)
 string(TIMESTAMP PACKAGE_TIMESTAMP "%Y%m%d.%H%M" UTC)
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION}~git${PACKAGE_TIMESTAMP}-${RELEASE_IDENTIFIER}-${DISTRO_CODENAME})
+
+include(TargetArch)
+target_architecture(PACKAGE_ARCH)
 
 configure_file(cmake/VERSION.in VERSION)
 
@@ -74,7 +78,7 @@ macro(add_includes_ldflags LDFLAGS INCLUDES)
 endmacro (add_includes_ldflags LDFLAGS INCLUDES)
 
 find_package(CXX17 REQUIRED COMPONENTS optional)
-find_package(Filesystem REQUIRED COMPONENTS Boost Final Experimental)
+find_package(Filesystem REQUIRED COMPONENTS ghc Final Experimental)
 
 # libexec
 if (WIN32)
@@ -198,13 +202,13 @@ mark_as_advanced (FORCE
 )
 
 # Advanced development config
-set (DEV_CONFIG_DIR ".xournalpp" CACHE STRING "Xournal++ config dir, relative to user's home dir")
 set (DEV_TOOLBAR_CONFIG "toolbar.ini" CACHE STRING "Toolbar config file name")
 set (DEV_SETTINGS_XML_FILE "settings.xml" CACHE STRING "Settings file name")
 set (DEV_PRINT_CONFIG_FILE "print-config.ini" CACHE STRING "Print config file name")
 set (DEV_METADATA_FILE "metadata.ini" CACHE STRING "Metadata file name")
 set (DEV_METADATA_MAX_ITEMS 50 CACHE STRING "Maximal amount of metadata elements")
 set (DEV_ERRORLOG_DIR "errorlogs" CACHE STRING "Directory where errorlogfiles will be placed")
+set (DEV_FILE_FORMAT_VERSION 4 CACHE STRING "File format version" FORCE)
 
 option(DEV_ENABLE_GCOV "Build with gcov support" OFF) # Enabel gcov support – expanded in src/
 option (DEV_CHECK_GTK3_COMPAT "Adds a few compiler flags to check basic GTK3 upgradeability support (still compiles for GTK2!)")
@@ -212,10 +216,10 @@ if (DEV_CHECK_GTK3_COMPAT)
 	add_definitions(-DGTK_DISABLE_SINGLE_INCLUDES -DGDK_DISABLE_DEPRECATED -DGTK_DISABLE_DEPRECATED -DGSEAL_ENABLE)
 endif ()
 
-mark_as_advanced(FORCE
-		DEV_CONFIG_DIR DEV_TOOLBAR_CONFIG DEV_SETTINGS_XML_FILE DEV_PRINT_CONFIG_FILE DEV_METADATA_FILE DEV_METADATA_MAX_ITEMS
+mark_as_advanced (FORCE
+		DEV_TOOLBAR_CONFIG DEV_SETTINGS_XML_FILE DEV_PRINT_CONFIG_FILE DEV_METADATA_FILE DEV_METADATA_MAX_ITEMS
 		DEV_ENABLE_GCOV DEV_CHECK_GTK3_COMPAT
-		)
+)
 
 configure_file(
 		src/config.h.in
@@ -259,6 +263,10 @@ install (DIRECTORY ui
 install (DIRECTORY plugins
 		DESTINATION "share/xournalpp"
 		COMPONENT xournalpp
+)
+install (DIRECTORY resources
+        DESTINATION "share/xournalpp"
+        COMPONENT xournalpp
 )
 
 # Install desktop shortcuts for Linux
@@ -317,6 +325,7 @@ message("
 Configuration:
 	Compiler:                   ${CMAKE_CXX_COMPILER}
 	CppUnit enabled:            ${ENABLE_CPPUNIT}
+	Filesystem library:         ${CXX_FILESYSTEM_NAMESPACE}
 ")
 
 option(CMAKE_DEBUG_INCLUDES_LDFLAGS "List include dirs and ldflags for xournalpp target" OFF)
@@ -331,11 +340,9 @@ endif (CMAKE_DEBUG_INCLUDES_LDFLAGS)
 set (CPACK_OUTPUT_FILE_PREFIX packages)
 set (CPACK_PACKAGE_NAME "${PROJECT_PACKAGE}")
 set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Xournal++ - Open source hand note-taking program")
+file(READ "${PROJECT_SOURCE_DIR}/debian/package_description" CPACK_DEBIAN_PACKAGE_DESCRIPTION)
 set (CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 set (CPACK_PACKAGE_INSTALL_DIRECTORY "Xournal++")
-
-include(TargetArch)
-target_architecture(PACKAGE_ARCH)
 set (CPACK_PACKAGE_FILE_NAME "xournalpp-${PROJECT_VERSION}-${DISTRO_NAME}-${DISTRO_CODENAME}-${PACKAGE_ARCH}")
 
 # .deb package options
@@ -344,11 +351,21 @@ set (CPACK_DEBIAN_PACKAGE_HOMEPAGE ${PACKAGE_URL})
 set (CPACK_DEBIAN_PACKAGE_MAINTAINER "Andreas Butti <andreasbutti@gmail.com>")
 set (CPACK_DEBIAN_PACKAGE_SECTION "graphics")
 set (CPACK_DEBIAN_PACKAGE_DEPENDS
-		"libglib2.0-0 (>= 2.32), libgtk-3-0 (>= 3.18), libpoppler-glib8 (>= 0.41.0), libxml2 (>= 2.0.0), libportaudiocpp0 (>= 12), libsndfile1 (>= 1.0.25), liblua5.3-0, libzip5 (>= 1.0.1), zlib1g")
+		"libglib2.0-0 (>= 2.32), libgtk-3-0 (>= 3.18), libpoppler-glib8 (>= 0.41.0), libxml2 (>= 2.0.0), libportaudiocpp0 (>= 12), libsndfile1 (>= 1.0.25), liblua5.3-0, libzip4 (>= 1.0.1) | libzip5, zlib1g, libc6")
 set (CPACK_DEBIAN_PACKAGE_SUGGESTS "texlive-base, texlive-latex-extra")  # Latex tool
 # Use debian's arch scheme; we only care about x86/amd64 for now but feel free to add more
 if (${PACKAGE_ARCH} STREQUAL "x86_64")
 	set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+endif()
+
+if(CPACK_GENERATOR STREQUAL "DEB")
+	message("Preparing documentation for DEB package")
+	add_custom_target(package_docummentation ALL)
+
+	#Compress changelog and save it as share/doc/xournalpp/changelog.Debian.gz
+	add_custom_command(TARGET package_docummentation PRE_BUILD
+	COMMAND gzip -c -9 -n "${PROJECT_SOURCE_DIR}/debian/changelog" > "changelog.Debian.gz" VERBATIM)
+	install(FILES "${CMAKE_CURRENT_BINARY_DIR}/changelog.Debian.gz" DESTINATION "share/doc/xournalpp/")
 endif()
 
 if (NOT DEFINED CPACK_GENERATOR)

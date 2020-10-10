@@ -1,5 +1,6 @@
 #include "Document.h"
 
+#include <algorithm>
 #include <utility>
 
 #include <config.h>
@@ -7,9 +8,11 @@
 #include "pdf/base/XojPdfAction.h"
 
 #include "LinkDestination.h"
+#include "PathUtil.h"
 #include "Stacktrace.h"
 #include "Util.h"
 #include "XojPage.h"
+#include "filesystem.h"
 #include "i18n.h"
 
 Document::Document(DocumentHandler* handler): handler(handler) { g_mutex_init(&this->documentLock); }
@@ -85,10 +88,11 @@ void Document::clearDocument(bool destroy) {
     }
 
     this->pages.clear();
+    this->pageIndex.reset();
     freeTreeContentModel();
 
-    this->filename = "";
-    this->pdfFilename = "";
+    this->filepath = fs::path{};
+    this->pdfFilepath = fs::path{};
 }
 
 /**
@@ -98,34 +102,35 @@ auto Document::getPageCount() -> size_t { return this->pages.size(); }
 
 auto Document::getPdfPageCount() -> size_t { return pdfDocument.getPageCount(); }
 
-void Document::setFilename(Path filename) { this->filename = std::move(filename); }
+void Document::setFilepath(fs::path filepath) { this->filepath = std::move(filepath); }
 
-auto Document::getFilename() -> Path { return filename; }
+auto Document::getFilepath() -> fs::path { return filepath; }
 
-auto Document::getPdfFilename() -> Path { return pdfFilename; }
+auto Document::getPdfFilepath() -> fs::path { return pdfFilepath; }
 
-auto Document::createSaveFolder(Path lastSavePath) -> Path {
-    if (!filename.isEmpty()) {
-        return filename.getParentPath();
+auto Document::createSaveFolder(fs::path lastSavePath) -> fs::path {
+    if (!filepath.empty()) {
+        return filepath.parent_path();
     }
-    if (!pdfFilename.isEmpty()) {
-        return pdfFilename.getParentPath();
+    if (!pdfFilepath.empty()) {
+        return pdfFilepath.parent_path();
     }
 
 
     return lastSavePath;
 }
 
-auto Document::createSaveFilename(DocumentType type, const string& defaultSaveName) -> Path {
-    if (!filename.isEmpty()) {
+auto Document::createSaveFilename(DocumentType type, const string& defaultSaveName) -> fs::path {
+    if (!filepath.empty()) {
         // This can be any extension
-        Path p = filename.getFilename();
-        p.clearExtensions();
+        fs::path p = filepath.filename();
+        Util::clearExtensions(p);
         return p;
     }
-    if (!pdfFilename.isEmpty()) {
-        Path p = pdfFilename.getFilename();
-        p.clearExtensions();
+    if (!pdfFilepath.empty()) {
+        fs::path p = pdfFilepath.filename();
+        std::string ext = this->attachPdf ? ".pdf" : "";
+        Util::clearExtensions(p, ext);
         return p;
     }
 
@@ -135,8 +140,8 @@ auto Document::createSaveFilename(DocumentType type, const string& defaultSaveNa
     strftime(stime, sizeof(stime), defaultSaveName.c_str(), localtime(&curtime));
 
     // Remove the extension, file format is handled by the filter combo box
-    Path p = stime;
-    p.clearExtensions();
+    fs::path p = stime;
+    Util::clearExtensions(p);
     return p;
 }
 
@@ -154,14 +159,14 @@ void Document::setPreview(cairo_surface_t* preview) {
     }
 }
 
-auto Document::getEvMetadataFilename() -> Path {
-    if (!this->filename.isEmpty()) {
-        return this->filename;
+auto Document::getEvMetadataFilename() -> fs::path {
+    if (!this->filepath.empty()) {
+        return this->filepath;
     }
-    if (!this->pdfFilename.isEmpty()) {
-        return this->pdfFilename;
+    if (!this->pdfFilepath.empty()) {
+        return this->pdfFilepath;
     }
-    return Path("");
+    return fs::path{};
 }
 
 auto Document::isPdfDocumentLoaded() -> bool { return pdfDocument.isLoaded(); }
@@ -169,15 +174,15 @@ auto Document::isPdfDocumentLoaded() -> bool { return pdfDocument.isLoaded(); }
 auto Document::isAttachPdf() const -> bool { return this->attachPdf; }
 
 auto Document::findPdfPage(size_t pdfPage) -> size_t {
-    for (size_t i = 0; i < getPageCount(); i++) {
-        PageRef p = this->pages[i];
-        if (p->getBackgroundType().isPdfPage()) {
-            if (p->getPdfPageNr() == pdfPage) {
-                return i;
-            }
-        }
+    // Create a page index if not already indexed.
+    if (!this->pageIndex)
+        indexPdfPages();
+    auto pos = this->pageIndex->find(pdfPage);
+    if (pos == this->pageIndex->end()) {
+        return -1;
+    } else {
+        return pos->second;
     }
-    return -1;
 }
 
 void Document::buildTreeContentsModel(GtkTreeIter* parent, XojPdfBookmarkIterator* iter) {
@@ -214,6 +219,18 @@ void Document::buildTreeContentsModel(GtkTreeIter* parent, XojPdfBookmarkIterato
 
     } while (iter->next());
 }
+
+void Document::indexPdfPages() {
+    auto index = std::make_unique<PageIndex>();
+    for (size_t i = 0; i < this->pages.size(); ++i) {
+        const auto& p = this->pages[i];
+        if (p->getBackgroundType().isPdfPage()) {
+            index->emplace(p->getPdfPageNr(), i);
+        }
+    }
+    this->pageIndex.swap(index);
+}
+
 
 void Document::buildContentsModel() {
     freeTreeContentModel();
@@ -259,7 +276,7 @@ void Document::updateIndexPageNumbers() {
     }
 }
 
-auto Document::readPdf(const Path& filename, bool initPages, bool attachToDocument, gpointer data, gsize length)
+auto Document::readPdf(const fs::path& filename, bool initPages, bool attachToDocument, gpointer data, gsize length)
         -> bool {
     GError* popplerError = nullptr;
 
@@ -267,26 +284,27 @@ auto Document::readPdf(const Path& filename, bool initPages, bool attachToDocume
 
     if (data != nullptr) {
         if (!pdfDocument.load(data, length, password, &popplerError)) {
-            lastError = FS(_F("Document not loaded! ({1}), {2}") % filename.str() % popplerError->message);
+            lastError = FS(_F("Document not loaded! ({1}), {2}") % filename.string() % popplerError->message);
             g_error_free(popplerError);
             unlock();
 
             return false;
         }
     } else {
-        if (!pdfDocument.load(filename.c_str(), password, &popplerError)) {
-            lastError = FS(_F("Document not loaded! ({1}), {2}") % filename.str() % popplerError->message);
-            g_error_free(popplerError);
+        if (!pdfDocument.load(filename, password, &popplerError)) {
+            if (popplerError) {
+                lastError = FS(_F("Document not loaded! ({1}), {2}") % filename.string() % popplerError->message);
+                g_error_free(popplerError);
+            } else {
+                lastError = FS(_F("Document not loaded! ({1}), {2}") % filename.string() % "");
+            }
             unlock();
-
             return false;
         }
     }
 
-
-    this->pdfFilename = filename;
+    this->pdfFilepath = filename;
     this->attachPdf = attachToDocument;
-
     lastError = "";
 
     if (initPages) {
@@ -296,12 +314,13 @@ auto Document::readPdf(const Path& filename, bool initPages, bool attachToDocume
     if (initPages) {
         for (size_t i = 0; i < pdfDocument.getPageCount(); i++) {
             XojPdfPageSPtr page = pdfDocument.getPage(i);
-            PageRef p = new XojPage(page->getWidth(), page->getHeight());
+            auto p = std::make_shared<XojPage>(page->getWidth(), page->getHeight());
             p->setBackgroundPdfPageNr(i);
-            addPage(p);
+            this->pages.emplace_back(std::move(p));
         }
     }
 
+    indexPdfPages();
     buildContentsModel();
     updateIndexPageNumbers();
 
@@ -327,18 +346,24 @@ void Document::deletePage(size_t pNr) {
     auto it = this->pages.begin() + pNr;
     this->pages.erase(it);
 
+    // Reset the page index
+    this->pageIndex.reset();
     updateIndexPageNumbers();
 }
 
 void Document::insertPage(const PageRef& p, size_t position) {
     this->pages.insert(this->pages.begin() + position, p);
 
+    // Reset the page index
+    this->pageIndex.reset();
     updateIndexPageNumbers();
 }
 
 void Document::addPage(const PageRef& p) {
     this->pages.push_back(p);
 
+    // Reset the page index
+    this->pageIndex.reset();
     updateIndexPageNumbers();
 }
 
@@ -376,13 +401,11 @@ auto Document::operator=(const Document& doc) -> Document& {
 
     this->password = doc.password;
     this->createBackupOnSave = doc.createBackupOnSave;
-    this->pdfFilename = doc.pdfFilename;
-    this->filename = doc.filename;
+    this->pdfFilepath = doc.pdfFilepath;
+    this->filepath = doc.filepath;
+    this->pages = doc.pages;
 
-    for (const PageRef& p: doc.pages) {
-        addPage(p);
-    }
-
+    indexPdfPages();
     buildContentsModel();
     updateIndexPageNumbers();
 

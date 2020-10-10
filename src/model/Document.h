@@ -13,7 +13,9 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "pdf/base/XojPdfBookmarkIterator.h"
@@ -23,8 +25,8 @@
 #include "DocumentHandler.h"
 #include "LinkDestination.h"
 #include "PageRef.h"
-#include "Path.h"
 #include "XournalType.h"
+#include "filesystem.h"
 
 class Document {
 public:
@@ -34,7 +36,7 @@ public:
 public:
     enum DocumentType { XOPP, XOJ, PDF };
 
-    bool readPdf(const Path& filename, bool initPages, bool attachToDocument, gpointer data = nullptr,
+    bool readPdf(const fs::path& filename, bool initPages, bool attachToDocument, gpointer data = nullptr,
                  gsize length = 0);
 
     size_t getPageCount();
@@ -44,6 +46,8 @@ public:
 
     void insertPage(const PageRef& p, size_t position);
     void addPage(const PageRef& p);
+    template <class InputIter>
+    void addPages(InputIter first, InputIter last);
     PageRef getPage(size_t page);
     void deletePage(size_t pNr);
 
@@ -63,13 +67,13 @@ public:
 
     Document& operator=(const Document& doc);
 
-    void setFilename(Path filename);
-    Path getFilename();
-    Path getPdfFilename();
-    Path createSaveFolder(Path lastSavePath);
-    Path createSaveFilename(DocumentType type, const string& defaultSaveName);
+    void setFilepath(fs::path filepath);
+    fs::path getFilepath();
+    fs::path getPdfFilepath();
+    fs::path createSaveFolder(fs::path lastSavePath);
+    fs::path createSaveFilename(DocumentType type, const string& defaultSaveName);
 
-    Path getEvMetadataFilename();
+    fs::path getEvMetadataFilename();
 
     GtkTreeModel* getContentsModel();
 
@@ -101,8 +105,8 @@ private:
 
     XojPdfDocument pdfDocument;
 
-    Path filename;
-    Path pdfFilename;
+    fs::path filepath;
+    fs::path pdfFilepath;
     bool attachPdf = false;
 
     /**
@@ -116,6 +120,23 @@ private:
      * The pages in the document
      */
     vector<PageRef> pages;
+
+    /**
+     * Index from pdf page number to document page number
+     */
+    using PageIndex = std::unordered_map<size_t, size_t>;
+
+    /**
+     * The cached page index
+     */
+    std::unique_ptr<PageIndex> pageIndex;
+
+    /**
+     * Creates an index from pdf page number to document page number
+     *
+     * Clears the index first in case it is already exists.
+     */
+    void indexPdfPages();
 
     /**
      * The bookmark contents model
@@ -137,3 +158,10 @@ private:
      */
     GMutex documentLock{};
 };
+
+template <class InputIter>
+void Document::addPages(InputIter first, InputIter last) {
+    this->pages.insert(this->pages.end(), first, last);
+    this->pageIndex.reset();
+    updateIndexPageNumbers();
+}
